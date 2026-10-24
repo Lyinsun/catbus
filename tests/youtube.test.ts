@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { fakeResponse, type HttpResponse, mockSender, type PreparedRequest } from '../src/core/http.js'
 import { decode, int, str } from '../src/core/pb.js'
@@ -429,7 +429,7 @@ describe('youtube 平台（web）', () => {
       expect(r.env.ok).toBe(true)
       expect(ranges).toEqual([`/v:0-${10 * MB - 1}`, `/v:${10 * MB}-${20 * MB - 1}`, `/v:${20 * MB}-${25 * MB - 1}`, '/a:0-4'])
       expect(readFileSync(join(dir, 'youtube_dQw4w9WgXcQ_1.mp4'), 'utf8')).toBe(`[0-${10 * MB - 1}][${10 * MB}-${20 * MB - 1}][${20 * MB}-${25 * MB - 1}]`)
-      expect(r.env.data.map((f: any) => f.path.split('/').at(-1))).toEqual(['youtube_dQw4w9WgXcQ_1.mp4', 'youtube_dQw4w9WgXcQ_2.m4a'])
+      expect(r.env.data.map((f: any) => basename(f.path))).toEqual(['youtube_dQw4w9WgXcQ_1.mp4', 'youtube_dQw4w9WgXcQ_2.m4a'])
     })
 
     it('item download：超过约 1 分钟的部分回 403 时，报错说明只能下载前 1 分钟', async () => {
