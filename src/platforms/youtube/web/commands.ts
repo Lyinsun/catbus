@@ -1,12 +1,12 @@
 import { CatbusError } from '../../../core/errors.js'
-import { downloadMedia } from '../../../core/files.js'
+import { type DownloadOptions, downloadMedia } from '../../../core/files.js'
 import { cookieCredential, finishLogin, loginContext } from '../../../core/login.js'
 import * as n from '../../../core/normalize.js'
 import * as rand from '../../../core/rand.js'
 import type { HandlerContext } from '../../../core/registry.js'
 import { type AuthStatus, type Event, type Keyword, RAW, type UserRef } from '../../../core/schemas.js'
 import { reconnecting } from '../../../core/stream.js'
-import { authError, paged } from '../../../core/toolkit.js'
+import { authError, isGuest, paged } from '../../../core/toolkit.js'
 import * as api from './api.js'
 import { VR_UA, type YtClient, yt } from './client.js'
 import * as norm from './normalize.js'
@@ -188,13 +188,24 @@ export async function itemGet(ctx: Ctx) {
   const c = yt(ctx)
   const id = videoId(ctx.args.item!)
   const [player, next] = await Promise.all([api.player(c, id), api.next(c, id)])
+  if (player?.videoDetails?.videoId) return norm.video(player, next)
+  // player 被人机验证拦下时（同一出口 IP 请求多了会发生），用 watch 页的数据兜底
+  const fallback = isBot(player?.playabilityStatus) ? norm.watchVideo(id, next) : null
+  if (fallback) {
+    ctx.log.warn('player 接口要求人机验证，改用 watch 页的数据：发布时间只精确到天')
+    return fallback
+  }
   assertVideo(c.ctx, player, id)
   return norm.video(player, next)
 }
 
 /** 人机验证：同一出口 IP 请求过多时 player 返回 LOGIN_REQUIRED + 「confirm you're not a bot」。 */
+function isBot(ps: any): boolean {
+  return ps?.status === 'LOGIN_REQUIRED' && /bot/i.test(ps.reason ?? '')
+}
+
 function checkBot(ps: any): void {
-  if (ps?.status === 'LOGIN_REQUIRED' && /bot/i.test(ps.reason ?? '')) {
+  if (isBot(ps)) {
     throw new CatbusError('RISK_CONTROL', `YouTube 要求人机验证：${ps.reason}`, {
       hint: '当前出口 IP 请求过多，过一段时间再试，或换一个代理出口',
       detail: { kind: 'captcha', status: ps.status },
@@ -207,8 +218,11 @@ function assertVideo(ctx: Ctx, player: any, id: string): void {
   if (player?.videoDetails?.videoId) return
   const ps = player?.playabilityStatus ?? {}
   checkBot(ps)
-  if (ps.status === 'LOGIN_REQUIRED') throw authError(ctx, `这个视频需要登录才能看：${ps.reason ?? id}`)
-  throw new CatbusError('UPSTREAM', `视频不可用：${ps.reason ?? ps.status ?? id}`, { detail: { status: ps.status, reason: ps.reason ?? null, id } })
+  // reason 为空时，原因在错误页的文字里（例如私享视频：「Private video」）
+  const reason: string = ps.reason ?? norm.collect(ps.errorScreen, 'simpleText').find(Boolean) ?? ps.status ?? id
+  // 游客：登录后可能能看；已登录还被拦（私享、会员专享等），重新登录也没用
+  if (ps.status === 'LOGIN_REQUIRED' && isGuest(ctx)) throw authError(ctx, `这个视频需要登录才能看：${reason}`)
+  throw new CatbusError('UPSTREAM', `视频不可用：${reason}`, { detail: { status: ps.status ?? null, reason, id } })
 }
 
 /** 媒体地址：ANDROID_VR 客户端的 player。人机验证、年龄限制等拿不到地址时按 playabilityStatus 报错。 */
@@ -230,14 +244,33 @@ export async function itemMedia(ctx: Ctx) {
   return mediaOf(yt(ctx), videoId(ctx.args.item!))
 }
 
+const CHUNK_BYTES = 10 * 1024 * 1024
+
 export async function itemDownload(ctx: Ctx) {
   const c = yt(ctx)
   const id = videoId(ctx.args.item!)
   const media = await mediaOf(c, id)
-  return downloadMedia(ctx, c.http, id, media, {
-    headers: [['User-Agent', VR_UA]],
-    ext: (m) => norm.formatExt((m as any)[RAW]?.mimeType),
+  return downloadMedia(ctx, c.http, id, media, downloadOptions).catch((err) => {
+    // 实测（2026-10-24）：没有 PO token 的地址只给前约 1 分钟的数据，之后的分段回 403
+    const d = err instanceof CatbusError ? (err.detail as { status?: number; range?: number[] } | null) : null
+    if (d?.status === 403 && (d.range?.[0] ?? 0) > 0) {
+      throw new CatbusError('UPSTREAM', 'YouTube 只允许下载这个视频的前约 1 分钟（没有 PO token 的地址超过 1 分钟后回 403）', {
+        hint: '目前只能完整下载 1 分钟以内的视频（如 Shorts）',
+        detail: d,
+      })
+    }
+    throw err
   })
+}
+
+const downloadOptions: DownloadOptions = {
+  headers: [['User-Agent', VR_UA]],
+  ext: (m) => norm.formatExt((m as any)[RAW]?.mimeType),
+  // googlevideo 拒绝整文件请求（403），不分段时还会被限速：按 10 MB 一段用 range 参数下载（与 yt-dlp 相同）
+  chunked: (m) => {
+    const total = Number((m as any)[RAW]?.contentLength)
+    return total > 0 ? { total, bytes: CHUNK_BYTES, url: (start, end) => `${m.url}&range=${start}-${end}` } : undefined
+  },
 }
 
 export async function itemSearch(ctx: Ctx) {
@@ -285,8 +318,17 @@ export async function commentList(ctx: Ctx) {
   const id = videoId(ctx.args.item!)
   let token = ctx.cursor
   if (!token) {
-    token = commentsToken(await api.next(c, id))
-    if (!token) throw new CatbusError('UPSTREAM', '这个视频没有评论区（可能关闭了评论）', { detail: { id } })
+    const next = await api.next(c, id)
+    token = commentsToken(next)
+    if (!token) {
+      // 关闭评论时评论区只有一条提示（「Comments are turned off」）；正在直播的视频只有直播聊天，没有评论区
+      const live = norm.first(next, 'liveChatRenderer') != null
+      const shown = norm.text(norm.first(norm.collect(next, 'itemSectionRenderer').find((x) => x.sectionIdentifier === 'comment-item-section'), 'messageRenderer')?.text)
+      throw new CatbusError('UPSTREAM', live ? '正在直播的视频没有评论区，只有直播聊天' : `这个视频没有评论区${shown ? `：${shown}` : '（可能关闭了评论）'}`, {
+        hint: live ? `catbus youtube live history ${id}` : null,
+        detail: { id },
+      })
+    }
   }
   const res = await api.nextMore(c, token)
   return page(norm.comments(res, id), res, commentsPageToken(res))
@@ -379,7 +421,11 @@ export async function liveSearch(ctx: Ctx) {
 export async function liveGet(ctx: Ctx) {
   const c = yt(ctx)
   const id = videoId(ctx.args.room!)
-  const [player, next] = await Promise.all([api.player(c, id), api.next(c, id)])
+  const next = await api.next(c, id)
+  const room = norm.watchLive(id, next)
+  if (room) return room
+  // watch 页没有主信息：视频不存在、私享等，原因在 player 里
+  const player = await api.player(c, id)
   assertVideo(c.ctx, player, id)
   return norm.liveRoom(player, next)
 }
@@ -501,6 +547,8 @@ export const itemUncollect = write(videoArg, '移出稍后观看', (c, id) => ap
 
 /** 视频所属频道：评论点赞的 action 要带它。 */
 async function ownerOfVideo(c: YtClient, id: string): Promise<string> {
+  const owner = norm.watchChannel(await api.next(c, id))
+  if (owner) return owner
   const player = await api.player(c, id)
   assertVideo(c.ctx, player, id)
   return player.videoDetails.channelId
@@ -513,7 +561,7 @@ export async function commentAdd(ctx: Ctx) {
   const to = (ctx.options.replyTo as string | undefined)?.trim()
   const root = to?.split('.')[0]
   const res = root ? await api.createReply(c, ctx.args.text!, createReplyParams(id, root)) : await api.createComment(c, ctx.args.text!, createCommentParams(id))
-  checkWrite(res, '发表评论', '没有开 YouTube 频道的账号不能评论，先在 youtube.com 上创建频道')
+  checkWrite(res, '发表评论', '常见原因：账号没有开 YouTube 频道；视频关闭了评论；视频正在直播（只有直播聊天）')
   const created = norm.comments(res, id)[0]
   if (!created) throw new CatbusError('UPSTREAM', '评论已提交，但返回里没有新评论', { hint: `用 catbus youtube comment list ${id} 确认`, detail: { keys: Object.keys(res ?? {}) } })
   return created

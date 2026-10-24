@@ -39,7 +39,7 @@ export default definePlatform({
         'item related': impl('full', 'itemRelated'),
         'item list': { upstream: 'none', note: '要走 YouTube Studio 的接口，尚未实现' },
         'item media': impl('partial', 'itemMedia', { note: '最清晰的视频轨 + 音频轨（分轨）。走 ANDROID_VR 客户端、不带登录，同一出口 IP 请求过多会触发人机验证；年龄限制等视频拿不到' }),
-        'item download': impl('partial', 'itemDownload', { note: '下载 item media 的视频轨和音频轨两个文件，不合流' }),
+        'item download': impl('partial', 'itemDownload', { note: '下载 item media 的视频轨和音频轨两个文件，不合流；只能完整下载 1 分钟以内的视频（没有 PO token 的地址只给前约 1 分钟）' }),
         'item like': impl('full', 'itemLike'),
         'item unlike': impl('full', 'itemUnlike', { note: '取消点赞（也会取消点踩）' }),
         'item collect': impl('full', 'itemCollect', { note: '加入稍后观看' }),

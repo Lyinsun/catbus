@@ -35,6 +35,9 @@ const VR_CLIENT = {
 }
 export const VR_UA = 'com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip'
 
+/** 会改动账号数据的 InnerTube 接口：网络出错时不自动重试。 */
+const WRITE_PATH = /^(like|subscription|comment|browse\/edit_playlist|live_chat\/send|playlist|upload)\//
+
 /** 登录签名用的 cookie：SAPISIDHASH 与两个分区的变体，有哪个就带哪个。 */
 const SID_SCHEMES: [string, string][] = [
   ['SAPISIDHASH', 'SAPISID'],
@@ -126,7 +129,11 @@ export class YtClient {
     ]
     if (auth) headers.push(['Authorization', auth], ['X-Goog-AuthUser', '0'], ['X-Origin', ORIGIN])
     const client = { clientName: 'WEB', clientVersion: cfg.clientVersion, hl: HL, gl: GL, visitorData: cfg.visitorData }
-    return this.post(path, headers, { context: { client }, ...body })
+    const res = await this.post<T>(path, headers, { context: { client }, ...body })
+    // cookie 失效时（常见原因是浏览器开着同一个会话、Google 轮换了 cookie），需要登录的页面照样回 200，只是内容为空；
+    // 响应的 responseContext 里有 logged_in=0，据此报登录失效，不返回空列表
+    if (auth && loggedInFlag(res) === '0') throw authError(this.ctx, 'YouTube 登录态已失效（cookie 可能已被浏览器轮换），请重新导出 cookie 登录')
+    return res
   }
 
   /**
@@ -145,7 +152,14 @@ export class YtClient {
   }
 
   private async post<T>(path: string, headers: HeaderPairs, json: unknown, http = this.http): Promise<T> {
-    const res = await http.request({ method: 'POST', url: `${ORIGIN}/youtubei/v1/${path}`, query: { prettyPrint: 'false' }, headers, json })
+    const req = { method: 'POST', url: `${ORIGIN}/youtubei/v1/${path}`, query: { prettyPrint: 'false' }, headers, json }
+    // 经代理时偶发连接被重置：读取类请求重试一次；写操作不重试，避免重复提交
+    const res = await http.request(req).catch(async (err) => {
+      if (!(err instanceof CatbusError && err.code === 'NETWORK') || WRITE_PATH.test(path)) throw err
+      this.ctx.log.warn(`网络出错，重试一次：${err.message}`)
+      await rand.sleep(1000)
+      return http.request(req)
+    })
     await this.check(res, path)
     return parseJson<T>(res)
   }
@@ -182,6 +196,14 @@ export class YtClient {
     }
     throw new CatbusError('UPSTREAM', `YouTube 返回 HTTP ${res.status}${message ? `：${message}` : ''}`, { detail })
   }
+}
+
+/** responseContext.serviceTrackingParams 里的 logged_in（"0" / "1"），没有时为 null。 */
+function loggedInFlag(res: any): string | null {
+  for (const t of res?.responseContext?.serviceTrackingParams ?? []) {
+    for (const p of t.params ?? []) if (p.key === 'logged_in') return String(p.value)
+  }
+  return null
 }
 
 /** player 请求体里除 context 以外的部分：WEB 与 ANDROID_VR 相同。 */

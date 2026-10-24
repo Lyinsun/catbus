@@ -100,11 +100,22 @@ function channelRef(endpoint: any, name: unknown): UserRef | null {
 }
 
 /**
+ * videoRenderer 的频道：署名直接链到频道；多人合作的视频署名点开是「Collaborators」列表（showDialogCommand），
+ * 取列表第一个（上传者），再不行取频道头像的链接。
+ */
+function rendererOwner(v: any): UserRef | null {
+  const run = v.ownerText?.runs?.[0] ?? v.longBylineText?.runs?.[0] ?? v.shortBylineText?.runs?.[0]
+  if (run?.navigationEndpoint?.browseEndpoint) return channelRef(run.navigationEndpoint, run.text)
+  const collaborator = first(run?.navigationEndpoint, 'listItemViewModel')
+  const endpoint = first(collaborator, 'browseEndpoint') ?? first(v.channelThumbnailSupportedRenderers, 'browseEndpoint')
+  return channelRef({ browseEndpoint: endpoint }, text(collaborator?.title) ?? run?.text)
+}
+
+/**
  * 搜索结果、旧版列表里的 videoRenderer；稍后观看等播放列表里的 playlistVideoRenderer 结构相同，
  * 只是播放量和时间合在 videoInfo 里（`1.8B views • 16 years ago`）。
  */
 export function videoRenderer(v: any): Item {
-  const owner = v.ownerText?.runs?.[0] ?? v.longBylineText?.runs?.[0] ?? v.shortBylineText?.runs?.[0]
   const snippet = v.detailedMetadataSnippets?.[0]?.snippetText ?? v.descriptionSnippet
   const info = text(v.videoInfo)
   return n.item(
@@ -114,7 +125,7 @@ export function videoRenderer(v: any): Item {
       url: videoUrl(v.videoId),
       title: text(v.title),
       text: text(snippet),
-      author: channelRef(owner?.navigationEndpoint, owner?.text),
+      author: rendererOwner(v),
       created_at: relTime(v.publishedTimeText ?? info),
       cover: thumb(v.thumbnail),
       stats: { views: count(v.viewCountText ?? info) },
@@ -436,4 +447,74 @@ export function playMedia(player: any): Media[] {
       f,
     ),
   )
+}
+
+/** `Oct 24, 2009`、`Premiered Oct 1, 2020`、`Streamed live on Mar 3, 2024` → ISO（按 UTC 的当天）；相对时间按 relTime。 */
+function watchDate(v: unknown): string | null {
+  const s = text(v)
+  const m = s ? /([A-Z][a-z]{2,8}) (\d{1,2}), (\d{4})/.exec(s) : null
+  if (m) {
+    const ms = Date.parse(`${m[1]} ${m[2]}, ${m[3]} 00:00:00 UTC`)
+    if (Number.isFinite(ms)) return n.time(ms)
+  }
+  return relTime(s)
+}
+
+/** watch 页（next）的主信息：标题、播放量、日期、频道、简介、点赞。player 被人机验证拦下时用它兜底。 */
+function watchInfo(next: any) {
+  const p = first(next, 'videoPrimaryInfoRenderer')
+  if (!p) return null
+  const s = first(next, 'videoSecondaryInfoRenderer')
+  const owner = s?.owner?.videoOwnerRenderer
+  const views = p.viewCount?.videoViewCountRenderer ?? {}
+  // 精确的点赞数只在无障碍文字里：「like this video along with 19,494,554 other people」
+  const likeText = collect(first(p, 'likeButtonViewModel'), 'accessibilityText').find((t: string) => /along with/i.test(t))
+  return {
+    title: text(p.title),
+    views: n.count(views.originalViewCount) ?? count(views.viewCount),
+    live: views.isLive === true,
+    date: watchDate(p.dateText),
+    channel: channelRef(owner?.navigationEndpoint, text(owner?.title)),
+    description: text(s?.attributedDescription) ?? text(s?.description),
+    likes: likeText ? count(likeText) : count(text(first(first(p, 'likeButtonViewModel'), 'title'))),
+  }
+}
+
+/** 视频的封面：watch 页不给缩略图，用固定格式的地址。 */
+const coverOf = (id: string) => `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+
+/** 只有 watch 页数据时的视频详情（player 被拦）：发布日期只精确到天，点赞数取自按钮文字。 */
+export function watchVideo(id: string, next: any): Item | null {
+  const w = watchInfo(next)
+  if (!w) return null
+  const panel = collect(next, 'engagementPanelSectionListRenderer').find((x) => x.panelIdentifier === 'engagement-panel-comments-section')
+  return n.item(
+    {
+      id,
+      kind: 'video',
+      url: videoUrl(id),
+      title: w.title,
+      text: w.description,
+      author: w.channel,
+      created_at: w.date,
+      cover: coverOf(id),
+      stats: { views: w.views, likes: w.likes, comments: count(first(panel, 'contextualInfo')) },
+    },
+    { next },
+  )
+}
+
+/** 直播间信息只用 watch 页：不调 player，少一次容易触发人机验证的请求。 */
+export function watchLive(id: string, next: any): Live | null {
+  const w = watchInfo(next)
+  if (!w) return null
+  return n.live(
+    { id, url: videoUrl(id), title: w.title, status: w.live ? 'live' : 'offline', host: w.channel, cover: coverOf(id), stats: { viewers: w.live ? w.views : null } },
+    { next },
+  )
+}
+
+/** watch 页里视频所属的频道 ID。 */
+export function watchChannel(next: any): string | null {
+  return watchInfo(next)?.channel?.id ?? null
 }

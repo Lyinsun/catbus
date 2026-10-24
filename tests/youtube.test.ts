@@ -189,6 +189,21 @@ describe('youtube 平台（web）', () => {
       expect(r.stderr).toContain('未登录 youtube')
     })
 
+    it('item search：多人合作的视频署名是「Collaborators」列表，author 取第一个（上传者）', async () => {
+      // 2026-10-24 搜索 podcast 时遇到的结构（裁剪）
+      const collab = {
+        videoId: 'collabVideo1',
+        title: { runs: [{ text: 'Collab' }] },
+        ownerText: { runs: [{ text: 'A and B', navigationEndpoint: { showDialogCommand: { panelLoadingStrategy: { inlineContent: { dialogViewModel: { customContent: { listViewModel: { listItems: [
+          { listItemViewModel: { title: { content: 'Channel A' }, rendererContext: { commandContext: { onTap: { innertubeCommand: { browseEndpoint: { browseId: 'UCaaaaaaaaaaaaaaaaaaaaaa' } } } } } } },
+          { listItemViewModel: { title: { content: 'Channel B' }, rendererContext: { commandContext: { onTap: { innertubeCommand: { browseEndpoint: { browseId: 'UCbbbbbbbbbbbbbbbbbbbbbb' } } } } } } },
+        ] } } } } } } } }] },
+      }
+      const res = { contents: { twoColumnSearchResultsRenderer: { primaryContents: { sectionListRenderer: { contents: [{ itemSectionRenderer: { contents: [{ videoRenderer: collab }] } }] } } } } }
+      const r = await withYt({ search: () => res }, () => cli('youtube', 'item', 'search', 'podcast'))
+      expect(r.env.data[0].author).toEqual({ id: 'UCaaaaaaaaaaaaaaaaaaaaaa', name: 'Channel A', url: 'https://www.youtube.com/channel/UCaaaaaaaaaaaaaaaaaaaaaa' })
+    })
+
     it('item search：按上传时间排序已下线，--sort latest 报 UNSUPPORTED', async () => {
       const r = await cli('youtube', 'item', 'search', 'lofi', '--sort', 'latest')
       expect(r.code).toBe(2)
@@ -207,6 +222,17 @@ describe('youtube 平台（web）', () => {
       expect(r.env.data.stats.views).toBeGreaterThan(1e9)
       expect(r.env.data.stats.likes).toBeGreaterThan(1e7)
       expect(r.env.data.stats.comments).toBeGreaterThan(1e6)
+    })
+
+    it('item get：player 被人机验证拦下时，用 watch 页的数据兜底（日期精确到天、点赞数取自按钮）', async () => {
+      const bot = { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'Sign in to confirm you’re not a bot' } }
+      const r = await withYt({ player: () => bot, next: () => json('next') }, () => cli('youtube', 'item', 'get', 'dQw4w9WgXcQ'))
+      expect(r.env.data).toMatchObject({ id: 'dQw4w9WgXcQ', author: { id: 'UCuAXFkgsw1L7xaCfnd5JJOw', name: 'Rick Astley' }, created_at: '2009-10-24T08:00:00+08:00' })
+      expect(r.env.data.title).toContain('Never Gonna Give You Up')
+      expect(r.env.data.stats.views).toBeGreaterThan(1e9)
+      expect(r.env.data.stats.likes).toBeGreaterThan(1e7)
+      expect(r.env.data.text).toBeTruthy()
+      expect(r.stderr).toContain('人机验证')
     })
 
     it('item get：视频不可用时报 UPSTREAM，带上 playabilityStatus', async () => {
@@ -243,9 +269,11 @@ describe('youtube 平台（web）', () => {
 
     it('comment replies：自己拼回复 token；回复的 parent_id 是根评论', async () => {
       const root = 'UgzKYksqeQ5gA3t0g0F4AaABAg'
-      const r = await withYt({ player: () => json('player'), next: () => json('replies') }, async (calls) => {
+      // 视频所属频道取自 watch 页（不调 player），再拼回复 token
+      const r = await withYt({ next: (b) => (b.videoId ? json('next') : json('replies')) }, async (calls) => {
         const r = await cli('youtube', 'comment', 'replies', 'dQw4w9WgXcQ', root)
-        expect(calls.find((c) => c.path === 'next')!.body.continuation).toBe(repliesToken('dQw4w9WgXcQ', root, 'UCuAXFkgsw1L7xaCfnd5JJOw'))
+        expect(calls.map((c) => c.path)).not.toContain('player')
+        expect(calls.find((c) => c.path === 'next' && c.body.continuation)!.body.continuation).toBe(repliesToken('dQw4w9WgXcQ', root, 'UCuAXFkgsw1L7xaCfnd5JJOw'))
         return r
       })
       expect(r.env.data[0]).toMatchObject({ parent_id: root })
@@ -320,8 +348,14 @@ describe('youtube 平台（web）', () => {
 
     it('live get / history：在看人数、聊天消息；不在直播的视频报错', async () => {
       const routes = { player: () => ({ videoDetails: { videoId: 'liveVideo01', title: 'Live', channelId: 'UCSJ4gkVC6NrvII8umztf0Ow', author: 'Lofi Girl', isLive: true } }), next: () => json('live_next'), 'live_chat/get_live_chat': () => json('live_chat') }
-      const room = await withYt(routes, () => cli('youtube', 'live', 'get', 'liveVideo01'))
-      expect(room.env.data).toMatchObject({ id: 'liveVideo01', status: 'live', host: { id: 'UCSJ4gkVC6NrvII8umztf0Ow' } })
+      // live get 只用 watch 页，不调 player
+      const room = await withYt(routes, async (calls) => {
+        const r = await cli('youtube', 'live', 'get', 'liveVideo01')
+        expect(calls.map((c) => c.path)).not.toContain('player')
+        return r
+      })
+      expect(room.env.data).toMatchObject({ id: 'liveVideo01', status: 'live', host: { id: expect.stringMatching(/^UC/) } })
+      expect(room.env.data.title).toBeTruthy()
       expect(room.env.data.stats.viewers).toBeGreaterThan(0)
       const history = await withYt(routes, async (calls) => {
         const r = await cli('youtube', 'live', 'history', 'liveVideo01')
@@ -370,6 +404,45 @@ describe('youtube 平台（web）', () => {
         ['140', 'audio', null],
       ])
       expect(r.env.data[1].duration).toBeCloseTo(213.061)
+    })
+
+    it('item download：按 10 MB 一段用 range 参数分段下载，拼成一个文件（整文件 GET 会被 googlevideo 拒绝）', async () => {
+      const MB = 1024 * 1024
+      const vr2 = {
+        playabilityStatus: { status: 'OK' },
+        streamingData: {
+          adaptiveFormats: [
+            { itag: 137, url: 'https://media.example/v?id=1', mimeType: 'video/mp4; codecs="avc1"', height: 1080, contentLength: String(25 * MB) },
+            { itag: 140, url: 'https://media.example/a?id=2', mimeType: 'audio/mp4; codecs="mp4a"', contentLength: '5' },
+          ],
+        },
+      }
+      const ranges: string[] = []
+      const media = (_: unknown, p: PreparedRequest) => {
+        const u = new URL(p.url)
+        const range = u.searchParams.get('range')!
+        ranges.push(`${u.pathname}:${range}`)
+        return fakeResponse(`[${range}]`)
+      }
+      const dir = join(home.dir, 'dl')
+      const r = await withYt({ player: () => vr2, '/v': media, '/a': media }, () => cli('youtube', 'item', 'download', 'dQw4w9WgXcQ', '--dir', dir))
+      expect(r.env.ok).toBe(true)
+      expect(ranges).toEqual([`/v:0-${10 * MB - 1}`, `/v:${10 * MB}-${20 * MB - 1}`, `/v:${20 * MB}-${25 * MB - 1}`, '/a:0-4'])
+      expect(readFileSync(join(dir, 'youtube_dQw4w9WgXcQ_1.mp4'), 'utf8')).toBe(`[0-${10 * MB - 1}][${10 * MB}-${20 * MB - 1}][${20 * MB}-${25 * MB - 1}]`)
+      expect(r.env.data.map((f: any) => f.path.split('/').at(-1))).toEqual(['youtube_dQw4w9WgXcQ_1.mp4', 'youtube_dQw4w9WgXcQ_2.m4a'])
+    })
+
+    it('item download：超过约 1 分钟的部分回 403 时，报错说明只能下载前 1 分钟', async () => {
+      const MB = 1024 * 1024
+      const vr3 = { playabilityStatus: { status: 'OK' }, streamingData: { adaptiveFormats: [
+        { itag: 137, url: 'https://media.example/v?id=1', mimeType: 'video/mp4', height: 1080, contentLength: String(25 * MB) },
+        { itag: 140, url: 'https://media.example/a?id=2', mimeType: 'audio/mp4', contentLength: '5' },
+      ] } }
+      // 2026-10-24 真机：第一段 200，之后的分段 403
+      const media = (_: unknown, p: PreparedRequest) => (new URL(p.url).searchParams.get('range')!.startsWith('0-') ? fakeResponse('x') : fakeResponse('', { status: 403 }))
+      const r = await withYt({ player: () => vr3, '/v': media, '/a': media }, () => cli('youtube', 'item', 'download', 'dQw4w9WgXcQ', '--dir', join(home.dir, 'dl')))
+      expect(r.env.error).toMatchObject({ code: 'UPSTREAM', hint: '目前只能完整下载 1 分钟以内的视频（如 Shorts）' })
+      expect(r.env.error.message).toContain('前约 1 分钟')
     })
 
     it('item media：人机验证报 RISK_CONTROL', async () => {
@@ -421,6 +494,20 @@ describe('youtube 平台（web）', () => {
   })
 
   describe('审查补充', () => {
+    it('读取类请求网络出错时重试一次；写操作不重试', async () => {
+      const { RequestError } = await import('wreq-js')
+      let searches = 0
+      const r = await withYt(
+        { search: () => (++searches === 1 ? (() => { throw new RequestError('connection reset') })() : json('search')) },
+        () => cli('youtube', 'item', 'search', 'lofi'),
+      )
+      expect([r.env.ok, searches]).toEqual([true, 2])
+      await login()
+      let likes = 0
+      const w = await withYt({ 'like/like': () => (++likes, (() => { throw new RequestError('connection reset') })()) }, () => cli('youtube', 'item', 'like', 'dQw4w9WgXcQ'))
+      expect([w.env.error.code, likes]).toEqual(['NETWORK', 1])
+    })
+
     it('auth status：在线校验；cookie 失效（401）时为 logged_in false，不报错', async () => {
       await login()
       const ok = await withYt({ 'account/account_menu': () => ACCOUNT_MENU }, () => cli('youtube', 'auth', 'status'))
@@ -431,6 +518,20 @@ describe('youtube 平台（web）', () => {
       )
       expect(expired.code).toBe(0)
       expect(expired.env.data).toEqual({ logged_in: false, user: null, method: null, expires_at: null })
+    })
+
+    it('cookie 失效时需要登录的页面回 200 + 空内容（logged_in=0）：报 AUTH_EXPIRED，不返回空列表', async () => {
+      await login()
+      // 2026-10-24 真机：cookie 被浏览器轮换后，FEwhat_to_watch / FEhistory 都这样返回
+      const out = { responseContext: { serviceTrackingParams: [{ service: 'GFEEDBACK', params: [{ key: 'logged_in', value: '0' }] }] }, contents: {} }
+      const r = await withYt({ browse: () => out }, () => cli('youtube', 'feed', 'list'))
+      expect(r.code).toBe(3)
+      expect(r.env.error.code).toBe('AUTH_EXPIRED')
+      const status = await withYt({ 'account/account_menu': () => out }, () => cli('youtube', 'auth', 'status'))
+      expect(status.env.data.logged_in).toBe(false)
+      // 游客请求本来就是 logged_in=0，不算失效
+      const guest = await withYt({ search: () => ({ ...json('search'), ...out }) }, () => cli('youtube', 'item', 'search', 'lofi', '-a', 'guest'))
+      expect(guest.env.ok).toBe(true)
     })
 
     it('feed list / history list：--kind 对应的 browse 页', async () => {
@@ -497,6 +598,22 @@ describe('youtube 平台（web）', () => {
       expect(age.env.error.code).toBe('AUTH_REQUIRED')
     })
 
+    it('item get：已登录还要求登录（私享视频）报 UPSTREAM 并带上错误页的原因，不是登录失效', async () => {
+      await login()
+      // 2026-10-24 真机：搜索结果里的直播随后转为私享，player 只给 errorScreen
+      const priv = { playabilityStatus: { status: 'LOGIN_REQUIRED', errorScreen: { playerErrorMessageRenderer: { reason: { simpleText: 'Private video' } } } } }
+      const r = await withYt({ player: () => priv, next: () => ({}) }, () => cli('youtube', 'item', 'get', 'dQw4w9WgXcQ'))
+      expect(r.env.error).toMatchObject({ code: 'UPSTREAM', message: '视频不可用：Private video' })
+    })
+
+    it('comment list：关闭评论时带上页面提示；正在直播的视频提示用 live history', async () => {
+      const off = { contents: { twoColumnWatchNextResults: { results: { results: { contents: [{ itemSectionRenderer: { sectionIdentifier: 'comment-item-section', contents: [{ messageRenderer: { text: { runs: [{ text: 'Comments are turned off' }] } } }] } }] } } } } }
+      const r1 = await withYt({ next: () => off }, () => cli('youtube', 'comment', 'list', 'dQw4w9WgXcQ'))
+      expect(r1.env.error.message).toBe('这个视频没有评论区：Comments are turned off')
+      const r2 = await withYt({ next: () => json('live_next') }, () => cli('youtube', 'comment', 'list', 'liveVideo01'))
+      expect(r2.env.error).toMatchObject({ message: '正在直播的视频没有评论区，只有直播聊天', hint: 'catbus youtube live history liveVideo01' })
+    })
+
     it('item media：ANDROID_VR 响应的 Set-Cookie 不写回账号凭证', async () => {
       await login()
       const vr = { playabilityStatus: { status: 'OK' }, streamingData: { formats: [{ itag: 18, url: 'https://media.example/18', mimeType: 'video/mp4', height: 360 }] } }
@@ -505,7 +622,7 @@ describe('youtube 平台（web）', () => {
       expect(saved.scopes.main.cookies.map((c: any) => c.name)).not.toContain('VISITOR_INFO1_LIVE')
     })
 
-    it('comment add：没有频道的账号发评论，YouTube 只回 showErrorAction，报 UPSTREAM 并提示建频道', async () => {
+    it('comment add：没有频道的账号或关闭评论的视频，YouTube 只回 showErrorAction，报 UPSTREAM 并列出常见原因', async () => {
       await login()
       // 2026-10-24 没有频道的测试账号发评论的真实返回
       const failed = { actions: [{ showErrorAction: { errorMessage: { messageRenderer: { text: { simpleText: 'Comment failed to post.' } } } } }] }
@@ -612,7 +729,7 @@ describe('youtube 平台（web）', () => {
     })
 
     it('comment like / delete：action 带上视频所属频道；delete 需要确认', async () => {
-      await withYt({ player: () => json('player'), 'comment/perform_comment_action': () => ({}) }, async (calls) => {
+      await withYt({ next: () => json('next'), 'comment/perform_comment_action': () => ({}) }, async (calls) => {
         const like = await cli('youtube', 'comment', 'like', 'dQw4w9WgXcQ', 'Ugabc')
         expect(like.env.data).toEqual({ id: 'Ugabc' })
         expect(calls.at(-1)!.body.actions).toEqual([commentAction('like', 'dQw4w9WgXcQ', 'Ugabc', 'UCuAXFkgsw1L7xaCfnd5JJOw')])
