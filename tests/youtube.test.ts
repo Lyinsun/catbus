@@ -505,6 +505,15 @@ describe('youtube 平台（web）', () => {
       expect(saved.scopes.main.cookies.map((c: any) => c.name)).not.toContain('VISITOR_INFO1_LIVE')
     })
 
+    it('comment add：没有频道的账号发评论，YouTube 只回 showErrorAction，报 UPSTREAM 并提示建频道', async () => {
+      await login()
+      // 2026-10-24 没有频道的测试账号发评论的真实返回
+      const failed = { actions: [{ showErrorAction: { errorMessage: { messageRenderer: { text: { simpleText: 'Comment failed to post.' } } } } }] }
+      const r = await withYt({ 'comment/create_comment': () => failed }, () => cli('youtube', 'comment', 'add', 'dQw4w9WgXcQ', 'hello'))
+      expect(r.env.error).toMatchObject({ code: 'UPSTREAM', message: '发表评论失败：Comment failed to post.' })
+      expect(r.env.error.hint).toContain('频道')
+    })
+
     it('comment add：create_comment 的 actionResult 为 STATUS_FAILED 时报 UPSTREAM', async () => {
       await login()
       const r = await withYt({ 'comment/create_comment': () => ({ actionResult: { status: 'STATUS_FAILED' } }) }, () => cli('youtube', 'comment', 'add', 'dQw4w9WgXcQ', 'hello'))

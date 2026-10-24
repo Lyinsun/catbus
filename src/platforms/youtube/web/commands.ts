@@ -448,8 +448,16 @@ export function liveListen(ctx: Ctx) {
 
 // ================================================================ 写操作
 
-/** 写操作的结果检查：InnerTube 在业务失败时也可能返回 200，状态在 status / actionResults 里。 */
-function checkWrite(res: any, what: string): void {
+/**
+ * 写操作的结果检查：InnerTube 在业务失败时也可能返回 200，状态在 status / actionResult(s) 里，
+ * 或者只给一个弹错误提示的 showErrorAction（例如没有频道的账号发评论：「Comment failed to post.」）。
+ */
+function checkWrite(res: any, what: string, hint?: string): void {
+  const shown = norm.first(res, 'showErrorAction')
+  if (shown) {
+    const text = norm.collect(shown, 'simpleText').find(Boolean) ?? norm.text(norm.first(shown, 'text'))
+    throw new CatbusError('UPSTREAM', `${what}失败${text ? `：${text}` : ''}`, { hint: hint ?? null, detail: { action: 'showErrorAction' } })
+  }
   const status: string | undefined = res?.status ?? res?.actionResult?.status ?? res?.actionResults?.[0]?.status
   if (status && status !== 'STATUS_SUCCEEDED') {
     throw new CatbusError('UPSTREAM', `${what}失败：${status}`, { detail: { status, feedback: (res?.actionResult ?? res?.actionResults?.[0])?.feedback ?? null } })
@@ -505,7 +513,7 @@ export async function commentAdd(ctx: Ctx) {
   const to = (ctx.options.replyTo as string | undefined)?.trim()
   const root = to?.split('.')[0]
   const res = root ? await api.createReply(c, ctx.args.text!, createReplyParams(id, root)) : await api.createComment(c, ctx.args.text!, createCommentParams(id))
-  checkWrite(res, '发表评论')
+  checkWrite(res, '发表评论', '没有开 YouTube 频道的账号不能评论，先在 youtube.com 上创建频道')
   const created = norm.comments(res, id)[0]
   if (!created) throw new CatbusError('UPSTREAM', '评论已提交，但返回里没有新评论', { hint: `用 catbus youtube comment list ${id} 确认`, detail: { keys: Object.keys(res ?? {}) } })
   return created
