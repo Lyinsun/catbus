@@ -1,9 +1,10 @@
+import { z } from 'zod'
 import { filter, visibility } from '../../core/options.js'
 import { definePlatform, handlers } from '../../core/registry.js'
 import { VOCAB } from '../../core/vocab.js'
 
 /** 懒加载 web 端的 handler：只有执行到这条命令时才加载实现。 */
-const { impl } = handlers(() => import('./web/commands.js'))
+const { h, impl } = handlers(() => import('./web/commands.js'))
 
 export default definePlatform({
   id: 'youtube',
@@ -83,6 +84,20 @@ export default definePlatform({
         'series items': impl('full', 'seriesItems', { note: '<series> 为播放列表 ID（PL…）或带 list= 的链接' }),
 
         'history list': impl('full', 'historyList'),
+
+        'channel create': {
+          upstream: 'full',
+          summary: '给当前账号开 YouTube 频道',
+          args: [],
+          options: {
+            name: z.string().optional().describe('频道名称，默认用账号名'),
+            handle: z.string().optional().describe('频道 @handle（不带 @），默认用 YouTube 推荐的'),
+          },
+          auth: 'required',
+          output: 'User',
+          note: '上传视频、发评论、发直播聊天都要求账号有频道',
+          handler: h('channelCreate'),
+        },
       },
     },
     app: 'planned',

@@ -657,6 +657,8 @@ describe('youtube 平台（web）', () => {
           'like/like': () => ({}),
           'like/removelike': () => ({}),
           'browse/edit_playlist': () => ({ status: 'STATUS_SUCCEEDED' }),
+          // 2026-10-30 真机：稍后观看列表的条目带 setVideoId，移出要用它
+          browse: () => ({ contents: { playlistVideoRenderer: { videoId: 'dQw4w9WgXcQ', setVideoId: '56B44F6D10557CC6' } } }),
           'subscription/subscribe': () => ({ actions: [{ updateSubscribeButtonAction: { subscribed: true, channelId: 'UCuAXFkgsw1L7xaCfnd5JJOw' } }] }),
         },
         async (calls) => {
@@ -675,7 +677,8 @@ describe('youtube 平台（web）', () => {
             ['like/like', { target: { videoId: 'dQw4w9WgXcQ' } }],
             ['like/removelike', { target: { videoId: 'dQw4w9WgXcQ' } }],
             ['browse/edit_playlist', { playlistId: 'WL', actions: [{ addedVideoId: 'dQw4w9WgXcQ', action: 'ACTION_ADD_VIDEO' }] }],
-            ['browse/edit_playlist', { playlistId: 'WL', actions: [{ removedVideoId: 'dQw4w9WgXcQ', action: 'ACTION_REMOVE_VIDEO_BY_VIDEO_ID' }] }],
+            ['browse', { browseId: 'VLWL' }],
+            ['browse/edit_playlist', { playlistId: 'WL', actions: [{ setVideoId: '56B44F6D10557CC6', action: 'ACTION_REMOVE_VIDEO' }] }],
             ['subscription/subscribe', { channelIds: ['UCuAXFkgsw1L7xaCfnd5JJOw'] }],
           ])
         },

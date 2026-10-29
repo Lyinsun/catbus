@@ -79,6 +79,15 @@ export function sendLiveChat(c: YtClient, params: string, text: string, clientMe
   return c.innertube('live_chat/send_message', { params, clientMessageId, richMessage: { textSegments: [{ text }] } })
 }
 
+/** 开频道的对话框：默认名称、推荐的 handle 和 create_channel 要用的 channelCreationToken。已有频道时没有这个对话框。 */
+export function channelCreationForm(c: YtClient) {
+  return c.innertube('channel/get_channel_creation_form', {})
+}
+
+export function createChannel(c: YtClient, channelCreationToken: string, givenName: string, handle: string) {
+  return c.innertube('channel/create_channel', { channelCreationToken, givenName, handle })
+}
+
 export function commentAction(c: YtClient, actions: string[]) {
   return c.innertube('comment/perform_comment_action', { actions })
 }

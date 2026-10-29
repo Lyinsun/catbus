@@ -554,7 +554,21 @@ export const itemLike = write(videoArg, '点赞', (c, id) => api.like(c, 'like',
 export const itemUnlike = write(videoArg, '取消点赞', (c, id) => api.like(c, 'removelike', id))
 /** 收藏即「稍后观看」（WL）。 */
 export const itemCollect = write(videoArg, '加入稍后观看', (c, id) => api.editPlaylist(c, 'WL', [{ addedVideoId: id, action: 'ACTION_ADD_VIDEO' }]))
-export const itemUncollect = write(videoArg, '移出稍后观看', (c, id) => api.editPlaylist(c, 'WL', [{ removedVideoId: id, action: 'ACTION_REMOVE_VIDEO_BY_VIDEO_ID' }]))
+/**
+ * 移出稍后观看：WL 不接受按视频 ID 删除（ACTION_REMOVE_VIDEO_BY_VIDEO_ID 回 403），要用列表里这一项的 setVideoId，
+ * 与页面「Remove from Watch later」菜单发的请求相同。只查列表前 5 页。
+ */
+export const itemUncollect = write(videoArg, '移出稍后观看', async (c, id) => {
+  let res = await api.browse(c, 'VLWL')
+  for (let i = 0; i < 5; i++) {
+    const setVideoId = norm.setVideoId(res, id)
+    if (setVideoId) return api.editPlaylist(c, 'WL', [{ setVideoId, action: 'ACTION_REMOVE_VIDEO' }])
+    const token = norm.nextToken(res)
+    if (!token) break
+    res = await api.browseMore(c, token)
+  }
+  throw new CatbusError('UPSTREAM', `稍后观看里没有这个视频：${id}`, { hint: 'catbus youtube user collects me' })
+})
 
 /** 视频所属频道：评论点赞的 action 要带它。 */
 async function ownerOfVideo(c: YtClient, id: string): Promise<string> {
@@ -682,4 +696,32 @@ export async function itemDelete(ctx: Ctx) {
   const res = await studio(c, cfg, 'video/delete', { videoId: id })
   checkWrite(res, '删除视频')
   return { id }
+}
+
+// ================================================================ 频道
+
+/**
+ * 开频道：取开频道对话框（默认名称、推荐的 handle、channelCreationToken），再 create_channel。
+ * 已有频道的账号拿不到对话框。开好后把凭证里的用户 ID 换成频道 ID（AGENTS 5.3：有频道时以频道 ID 为准）。
+ */
+export async function channelCreate(ctx: Ctx) {
+  const c = yt(ctx)
+  if (!c.loggedIn) throw authError(ctx, '开频道需要登录')
+  const dialog = norm.first(await api.channelCreationForm(c), 'channelCreationDialogRenderer')
+  const token = dialog?.channelCreationEndpoint?.channelCreationServiceEndpoint?.channelCreationToken
+  if (typeof token !== 'string') {
+    const existing = await me(c, true)
+    if (existing) throw new CatbusError('USAGE', `这个账号已经有频道了：${existing.id}`, { hint: 'catbus youtube user get me' })
+    throw new CatbusError('UPSTREAM', '没有拿到开频道的表单', { hint: '到 https://www.youtube.com/create_channel 手动开频道' })
+  }
+  const o = ctx.options as { name?: string; handle?: string }
+  const name = o.name?.trim() || dialog.name
+  const handle = o.handle?.trim().replace(/^@/, '') || norm.first(dialog.channelHandleInput, 'channelHandleInputRenderer')?.handle
+  if (!name || !handle) throw new CatbusError('USAGE', '需要 --name 和 --handle', { hint: 'catbus youtube channel create --name <名称> --handle <handle>' })
+  checkWrite(await api.createChannel(c, token, name, handle), '开频道')
+  // create_channel 只回 accountStateToken，不带频道 ID：再查一次「你的频道」（实测 2026-10-30 立即可查到）
+  const id = (await me(c, true))?.id
+  if (!id) throw new CatbusError('UPSTREAM', '开频道的请求已提交，但还查不到新频道', { hint: '稍后用 catbus youtube user get me 确认' })
+  if (ctx.credential.user) ctx.credential.user = { ...ctx.credential.user, id, name }
+  return norm.channel(await api.browse(c, id))
 }

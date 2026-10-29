@@ -546,3 +546,15 @@ export function studioVideo(v: any, channelId: string): Item {
     v,
   )
 }
+
+/** 播放列表里某个视频这一项的 setVideoId（列表内的条目 ID，删除、移动时要用）。 */
+export function setVideoId(res: unknown, videoId: string): string | null {
+  let found: string | null = null
+  walk(res, (_k, v) => {
+    if (v && typeof v === 'object' && v.videoId === videoId && typeof v.setVideoId === 'string') {
+      found = v.setVideoId
+      return 'stop'
+    }
+  })
+  return found
+}

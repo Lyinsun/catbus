@@ -76,7 +76,7 @@ describe('注册表', () => {
       taobao: [],
       jd: ['cart count', 'coupon list', 'order list'],
       x: ['article delete', 'article publish'],
-      youtube: [],
+      youtube: ['channel create'],
       '12306': ['route get', 'station search', 'ticket price', 'ticket search', 'transfer search'],
       jimeng: [],
     })
