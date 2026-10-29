@@ -8,7 +8,7 @@
 | 上游仓库 | 无（直接对接 YouTube 网页背后的 InnerTube 接口 `/youtubei/v1/`） |
 | 接口来源 | 记录在 [`src/platforms/youtube/UPSTREAM`](../../src/platforms/youtube/UPSTREAM) |
 | 端 | web ✓ · app ○ 规划中 · pc ○ 规划中 |
-| 命令（web） | 已实现 43 条（✓ 41 · ◐ 2） |
+| 命令（web） | 已实现 44 条（✓ 40 · ◐ 4） |
 
 命令表与 `catbus platforms youtube` 一致；选项以 `catbus youtube <resource> <action> --help` 为准。通用的命令语法、输出结构见 [AGENTS.md 第 4 节](../../AGENTS.md#4-命令规范)。
 
@@ -91,8 +91,8 @@ catbus config set youtube.proxy http://127.0.0.1:7890
 | `item collect` | ✓ | 加入「稍后观看」。需要登录。 |
 | `item uncollect` | ✓ | 移出「稍后观看」。需要登录。 |
 | `item list` | ✓ | 自己频道上传的视频（含私享、草稿），按发布时间倒序，数据来自 YouTube Studio。需要登录。 |
-| `item publish` | ✓ | 发布视频：`--video` 与 `--title` 必填，可选 `--text`（简介）、`--tag`、`--cover`（缩略图）、`--visibility public\|private`、`--schedule`（先建成私享，到点转公开）。走 YouTube Studio 的分段上传。需要登录，账号要先开频道。 |
-| `item delete` | ✓ | 删除自己的视频。需要登录。 |
+| `item publish` | ◐ | 发布视频：`--video` 与 `--title` 必填，可选 `--text`（简介）、`--tag`、`--cover`（缩略图）、`--visibility public\|private`、`--schedule`（先建成私享，到点转公开）。走 YouTube Studio 的分段上传。需要登录，账号要先开频道。**目前会报 `RISK_CONTROL`**：Studio 建视频要带网页端 BotGuard 跑出的校验结果，catbus 还生成不了（文件能传上去，但视频建不出来）。 |
+| `item delete` | ◐ | 删除自己的视频。需要登录。同样要求 Studio 的 BotGuard 校验，目前会报 `RISK_CONTROL`。 |
 
 ### comment
 

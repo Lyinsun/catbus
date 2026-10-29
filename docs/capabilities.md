@@ -87,8 +87,8 @@
 | item collect | ○ | ✓ | ✓ | ✓ | ○ | ○ | ○ | ○ | ○ | ✓ | ✓ | — | — |
 | item uncollect | ○ | ✓ | ✓ | ✓ | ○ | ○ | ○ | ○ | ○ | ✓ | ✓ | — | — |
 | item repost / unrepost | — | — | ○ | — | — | ○ | — | — | — | ✓ | — | — | — |
-| item publish | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | — | — | ✓ | ✓ | — | — |
-| item delete | ○ | ○ | ○ | ◐ | ○ | ○ | ○ | — | — | ✓ | ✓ | — | — |
+| item publish | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | — | — | ✓ | ◐ | — | — |
+| item delete | ○ | ○ | ○ | ◐ | ○ | ○ | ○ | — | — | ✓ | ◐ | — | — |
 | item categories | — | — | — | ✓ | — | — | ○ | — | — | — | — | — | — |
 
 - douyin `item search`：--type video 走视频频道搜索，其余走综合频道；--type image 只要图文
@@ -107,9 +107,9 @@
 - youtube `item uncollect`：移出稍后观看
 - kuaishou `item publish`：不支持 --cover、--mention、--poi、--category、--price；--image 1～31 张（每张不超过 15MB），与 --video 二选一
 - x `item publish`：正文超过 280 权重时自动按长推发（需要 Premium）；--thread 发 thread
-- youtube `item publish`：走 YouTube Studio 的分段上传，账号要先开频道；--schedule 先建成私享，到点转公开
+- youtube `item publish`：走 YouTube Studio 的分段上传，账号要先开频道。Studio 建视频要求网页端的 BotGuard 校验，catbus 还生成不了，目前会报 RISK_CONTROL
 - bilibili `item delete`：需要人机验证（极验点选），catbus 还不能自动通过，会报 RISK_CONTROL
-- youtube `item delete`：只能删自己的视频
+- youtube `item delete`：只能删自己的视频。同样要求 Studio 的 BotGuard 校验，目前会报 RISK_CONTROL
 - `item get --area`：jd
 - `item search --sort` 取值：xhs general / latest / popular / comments / collects；douyin general / popular / latest；bilibili general / views / latest / collects；jd general / sales / price_asc / price_desc / comments；x general / latest；youtube general / popular
 - `item search --type` 取值：xhs all / video / image；douyin all / video / image；bilibili video / article；x all / video / image；youtube all / video

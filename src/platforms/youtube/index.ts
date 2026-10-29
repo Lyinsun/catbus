@@ -46,12 +46,12 @@ export default definePlatform({
         'item unlike': impl('full', 'itemUnlike', { note: '取消点赞（也会取消点踩）' }),
         'item collect': impl('full', 'itemCollect', { note: '加入稍后观看' }),
         'item uncollect': impl('full', 'itemUncollect', { note: '移出稍后观看' }),
-        'item publish': impl('full', 'itemPublish', {
+        'item publish': impl('partial', 'itemPublish', {
           supports: ['title', 'text', 'video', 'cover', 'tag', 'visibility', 'schedule'],
           options: { visibility: visibility('public', 'private') },
-          note: '走 YouTube Studio 的分段上传，账号要先开频道；--schedule 先建成私享，到点转公开',
+          note: '走 YouTube Studio 的分段上传，账号要先开频道。Studio 建视频要求网页端的 BotGuard 校验，catbus 还生成不了，目前会报 RISK_CONTROL',
         }),
-        'item delete': impl('full', 'itemDelete', { note: '只能删自己的视频' }),
+        'item delete': impl('partial', 'itemDelete', { note: '只能删自己的视频。同样要求 Studio 的 BotGuard 校验，目前会报 RISK_CONTROL' }),
 
         'comment list': impl('full', 'commentList'),
         'comment replies': impl('full', 'commentReplies', { note: '<comment> 为根评论 ID；YouTube 的回复只有一层' }),

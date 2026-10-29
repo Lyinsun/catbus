@@ -639,12 +639,12 @@ export async function itemPublish(ctx: Ctx) {
     },
   })
   const id: string | undefined = created?.videoId
-  // 2026-10-30 实测：Google 判定登录会话有风险时（新导入的 cookie、机房出口等），Studio 要求先重新输入密码，
-  // 网页上传同样卡在「Saving...」；此时 createvideo 回 200 但只有 responseContext
+  // 2026-10-30 实测：网页端的 createvideo 在 context.request.attestationResponseData 里带 att/get 的 challenge 和 BotGuard
+  // 跑出的 webResponse；不带时回 200 但只有 responseContext。jsdom 里跑 Studio 的 BotGuard 只得到失败标记（FNL~）
   if (!id) {
-    throw new CatbusError('RISK_CONTROL', '视频文件已上传，但 YouTube 没有建视频：这个登录会话需要先重新验证身份', {
-      hint: '在浏览器里用这个账号打开 https://studio.youtube.com 上传一次，按提示重新输入密码，再重新导出 cookie 登录',
-      detail: { kind: 'reauth', keys: Object.keys(created ?? {}) },
+    throw new CatbusError('RISK_CONTROL', '视频文件已上传，但 YouTube 没有建视频：Studio 要求网页端的 BotGuard 校验', {
+      hint: 'catbus 还不能生成这个校验（attestationResponseData），请到 https://studio.youtube.com 上传',
+      detail: { kind: 'attestation', keys: Object.keys(created ?? {}) },
     })
   }
   const update: Record<string, unknown> = {}
@@ -702,6 +702,13 @@ export async function itemDelete(ctx: Ctx) {
   const cfg = await studioConfig(c)
   const res = await studio(c, cfg, 'video/delete', { videoId: id })
   checkWrite(res, '删除视频')
+  // 2026-10-30 实测：没有 BotGuard 校验结果（attestationResponseData）时 Studio 回 200 但只有 responseContext，视频并没有删
+  if (!Object.keys(res ?? {}).some((k) => k !== 'responseContext')) {
+    throw new CatbusError('RISK_CONTROL', '删除请求没有生效：YouTube Studio 要求网页端的 BotGuard 校验', {
+      hint: `catbus 还不能生成这个校验，请到 https://studio.youtube.com/video/${id}/edit 手动删除`,
+      detail: { kind: 'attestation', id },
+    })
+  }
   return { id }
 }
 
