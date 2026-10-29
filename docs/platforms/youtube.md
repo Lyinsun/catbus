@@ -119,8 +119,12 @@ catbus config set youtube.proxy http://127.0.0.1:7890
 | `live search` | ✓ | 搜索正在直播的视频。 |
 | `live history` | ✓ | 直播聊天里最近的消息。取「Live chat」视图（全部消息），不是默认的「Top chat」（YouTube 筛选过的）。 |
 | `live listen` | ✓ | 持续输出直播聊天：文字消息（`chat`）、Super Chat 与 Super Sticker（`gift`）、会员相关（`gift` / `other`）。按服务端给的间隔轮询（约 10 秒一次），不是长连接；开始时已有的历史消息不输出；同样取「Live chat」视图。 |
-| `channel create` | ✓ | 给当前账号开 YouTube 频道：`--name` 默认用账号名，`--handle` 默认用 YouTube 推荐的。上传、发评论、发直播聊天都要求账号有频道；已有频道时报 `USAGE`。需要登录。 |
 | `live send` | ✓ | 发直播聊天文字消息。需要登录；只有会员能发言的直播间、慢速模式等限制按 YouTube 的提示报错。不支持 `--gift`（Super Chat 需要付款）。 |
+
+### channel
+| 命令 | 状态 | 说明 |
+|---|---|---|
+| `channel create` | ✓ | 给当前账号开 YouTube 频道：`--name` 默认用账号名，`--handle` 默认用 YouTube 推荐的。上传、发评论、发直播聊天都要求账号有频道；已有频道时报 `USAGE`。需要登录。 |
 
 ### keyword / notice / series / history
 

@@ -639,7 +639,14 @@ export async function itemPublish(ctx: Ctx) {
     },
   })
   const id: string | undefined = created?.videoId
-  if (!id) throw new CatbusError('UPSTREAM', '视频已上传，但建视频没有返回 videoId', { hint: '到 https://studio.youtube.com 查看上传记录', detail: { keys: Object.keys(created ?? {}) } })
+  // 2026-10-30 实测：Google 判定登录会话有风险时（新导入的 cookie、机房出口等），Studio 要求先重新输入密码，
+  // 网页上传同样卡在「Saving...」；此时 createvideo 回 200 但只有 responseContext
+  if (!id) {
+    throw new CatbusError('RISK_CONTROL', '视频文件已上传，但 YouTube 没有建视频：这个登录会话需要先重新验证身份', {
+      hint: '在浏览器里用这个账号打开 https://studio.youtube.com 上传一次，按提示重新输入密码，再重新导出 cookie 登录',
+      detail: { kind: 'reauth', keys: Object.keys(created ?? {}) },
+    })
+  }
   const update: Record<string, unknown> = {}
   if (o.tag?.length) update.tags = { newTags: o.tag }
   if (cover) update.videoStill = { operation: 'UPLOAD_CUSTOM_THUMBNAIL', image: { dataUri: dataUri(cover.data, cover.contentType) } }

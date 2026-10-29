@@ -719,6 +719,40 @@ describe('youtube 平台（web）', () => {
       })
     })
 
+    it('live send：取登录后聊天输入框里的 params 发消息；被限制时报出 YouTube 的说明', async () => {
+      const input = { actionPanel: { liveChatMessageInputRenderer: { sendButton: { buttonRenderer: { serviceEndpoint: { sendLiveChatMessageEndpoint: { params: 'SEND_PARAMS' } } } } } } }
+      const sent = { actions: [{ addChatItemAction: { item: { liveChatTextMessageRenderer: { id: 'MSG1' } } } }] }
+      await withYt({ next: () => json('live_next'), 'live_chat/get_live_chat': () => ({ continuationContents: { liveChatContinuation: input } }), 'live_chat/send_message': () => sent }, async (calls) => {
+        const r = await cli('youtube', 'live', 'send', 'liveVideo01', 'hello')
+        expect(r.env.data).toEqual({ id: 'MSG1' })
+        expect(calls.at(-1)!.body).toMatchObject({ params: 'SEND_PARAMS', richMessage: { textSegments: [{ text: 'hello' }] } })
+      })
+      // 2026-10-30 真机：Lofi Girl 直播间只允许订阅者发言
+      const restricted = { actionPanel: { liveChatRestrictedParticipationRenderer: { message: { runs: [{ text: 'Subscribers-only mode' }] } } } }
+      const r = await withYt({ next: () => json('live_next'), 'live_chat/get_live_chat': () => ({ continuationContents: { liveChatContinuation: restricted } }) }, () => cli('youtube', 'live', 'send', 'liveVideo01', 'hello'))
+      expect(r.env.error).toMatchObject({ code: 'UPSTREAM', message: '不能在这个直播间发消息：Subscribers-only mode' })
+      const gift = await cli('youtube', 'live', 'send', 'liveVideo01', '--gift', '1')
+      expect(gift.env.error.code).toBe('USAGE')
+    })
+
+    it('channel create：用表单里的 token、默认名称和推荐的 handle 开频道；已有频道时报 USAGE', async () => {
+      // 2026-10-30 真机：get_channel_creation_form 的对话框结构；create_channel 只回 accountStateToken
+      const form = {
+        actions: [{ openPopupAction: { popup: { channelCreationDialogRenderer: {
+          name: 'Test User',
+          channelCreationEndpoint: { channelCreationServiceEndpoint: { channelCreationToken: 'TOKEN' } },
+          channelHandleInput: { channelHandleInputRenderer: { handle: 'TestUser-w7k' } },
+        } } } }],
+      }
+      await withYt({ 'channel/get_channel_creation_form': () => form, 'channel/create_channel': () => ({ accountStateToken: 'x' }), 'account/account_menu': () => ACCOUNT_MENU, browse: () => json('channel') }, async (calls) => {
+        const r = await cli('youtube', 'channel', 'create', '--handle', '@mine')
+        expect(r.env.ok).toBe(true)
+        expect(calls.find((c) => c.path === 'channel/create_channel')!.body).toMatchObject({ channelCreationToken: 'TOKEN', givenName: 'Test User', handle: 'mine' })
+      })
+      const r = await withYt({ 'channel/get_channel_creation_form': () => ({}), 'account/account_menu': () => ACCOUNT_MENU }, () => cli('youtube', 'channel', 'create'))
+      expect(r.env.error).toMatchObject({ code: 'USAGE', message: `这个账号已经有频道了：${ME}` })
+    })
+
     it('comment like / delete：action 带上视频所属频道；delete 需要确认', async () => {
       await withYt({ next: () => json('next'), 'comment/perform_comment_action': () => ({}) }, async (calls) => {
         const like = await cli('youtube', 'comment', 'like', 'dQw4w9WgXcQ', 'Ugabc')
