@@ -79,7 +79,7 @@
 | item get | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | ✓ | ✓ | ✓ | — | — |
 | item search | ✓ | ✓ | ✓ | ✓ | ◐ | ◐ | ○ | ○ | ✓ | ✓ | ✓ | — | — |
 | item related | ○ | ○ | ✓ | ✓ | ✓ | — | ○ | ○ | ◐ | — | ✓ | — | — |
-| item list | ✓ | ◐ | ✓ | ✓ | ✓ | ○ | ○ | — | — | — | ○ | — | — |
+| item list | ✓ | ◐ | ✓ | ✓ | ✓ | ○ | ○ | — | — | — | ✓ | — | — |
 | item media | ✓ | ✓ | ◐ | ✓ | ✓ | ○ | — | — | — | ✓ | ◐ | — | — |
 | item download | ✓ | ✓ | ◐ | ✓ | ✓ | ○ | — | — | — | ✓ | ◐ | — | — |
 | item like | ○ | ✓ | ✓ | ✓ | ○ | ○ | — | — | — | ✓ | ✓ | — | — |
@@ -87,8 +87,8 @@
 | item collect | ○ | ✓ | ✓ | ✓ | ○ | ○ | ○ | ○ | ○ | ✓ | ✓ | — | — |
 | item uncollect | ○ | ✓ | ✓ | ✓ | ○ | ○ | ○ | ○ | ○ | ✓ | ✓ | — | — |
 | item repost / unrepost | — | — | ○ | — | — | ○ | — | — | — | ✓ | — | — | — |
-| item publish | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | — | — | ✓ | ○ | — | — |
-| item delete | ○ | ○ | ○ | ◐ | ○ | ○ | ○ | — | — | ✓ | ○ | — | — |
+| item publish | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | — | — | ✓ | ✓ | — | — |
+| item delete | ○ | ○ | ○ | ◐ | ○ | ○ | ○ | — | — | ✓ | ✓ | — | — |
 | item categories | — | — | — | ✓ | — | — | ○ | — | — | — | — | — | — |
 
 - douyin `item search`：--type video 走视频频道搜索，其余走综合频道；--type image 只要图文
@@ -97,7 +97,7 @@
 - x `item search`：--type video / image 走媒体搜索，按类型过滤，不能和 --sort latest 一起用
 - jd `item related`：用第一个相关搜索词的搜索结果
 - douyin `item list`：取发布页的作品预览（work_list）；定时未发布的作品 status 为 draft
-- youtube `item list`：要走 YouTube Studio 的接口，尚未实现
+- youtube `item list`：自己频道上传的视频，数据来自 YouTube Studio
 - tiktok `item media`：媒体地址取自视频详情（video.playAddr，图文取 imagePost），上游没有单独的解析接口
 - youtube `item media`：最清晰的视频轨 + 音频轨（分轨）。走 ANDROID_VR 客户端、不带登录，同一出口 IP 请求过多会触发人机验证；年龄限制等视频拿不到
 - tiktok `item download`：媒体地址同 item media
@@ -107,9 +107,9 @@
 - youtube `item uncollect`：移出稍后观看
 - kuaishou `item publish`：不支持 --cover、--mention、--poi、--category、--price；--image 1～31 张（每张不超过 15MB），与 --video 二选一
 - x `item publish`：正文超过 280 权重时自动按长推发（需要 Premium）；--thread 发 thread
-- youtube `item publish`：要走 YouTube Studio 的分片上传，尚未实现
+- youtube `item publish`：走 YouTube Studio 的分段上传，账号要先开频道；--schedule 先建成私享，到点转公开
 - bilibili `item delete`：需要人机验证（极验点选），catbus 还不能自动通过，会报 RISK_CONTROL
-- youtube `item delete`：要走 YouTube Studio 的接口，尚未实现
+- youtube `item delete`：只能删自己的视频
 - `item get --area`：jd
 - `item search --sort` 取值：xhs general / latest / popular / comments / collects；douyin general / popular / latest；bilibili general / views / latest / collects；jd general / sales / price_asc / price_desc / comments；x general / latest；youtube general / popular
 - `item search --type` 取值：xhs all / video / image；douyin all / video / image；bilibili video / article；x all / video / image；youtube all / video
@@ -120,8 +120,8 @@
 - `item related --area`：jd
 - `item collect --folder`：douyin、bilibili
 - `item uncollect --folder`：douyin、bilibili
-- `item publish` 不支持的标准选项：xhs --mention --category --price；douyin --category --price；tiktok --title --poi --category --schedule --price；bilibili --image --topic --mention --poi --schedule --price；kuaishou --cover --mention --poi --category --price；weibo --title --cover --tag --mention --poi --category --schedule --price；xianyu --video --cover --tag --topic --mention --poi --category --schedule；x --title --cover --tag --topic --mention --poi --category --schedule --price
-- `item publish --visibility` 取值：默认 public / private / friends；xhs public / private；bilibili public / private；weibo public / private / friends / fans；xianyu public；x public
+- `item publish` 不支持的标准选项：xhs --mention --category --price；douyin --category --price；tiktok --title --poi --category --schedule --price；bilibili --image --topic --mention --poi --schedule --price；kuaishou --cover --mention --poi --category --price；weibo --title --cover --tag --mention --poi --category --schedule --price；xianyu --video --cover --tag --topic --mention --poi --category --schedule；x --title --cover --tag --topic --mention --poi --category --schedule --price；youtube --image --topic --mention --poi --category --price
+- `item publish --visibility` 取值：默认 public / private / friends；xhs public / private；bilibili public / private；weibo public / private / friends / fans；xianyu public；x public；youtube public / private
 - `item publish --poi-name`：xhs、douyin、weibo
 - `item publish --series`：douyin
 - `item publish --hotspot`：douyin

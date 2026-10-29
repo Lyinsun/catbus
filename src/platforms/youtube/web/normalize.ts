@@ -518,3 +518,31 @@ export function watchLive(id: string, next: any): Live | null {
 export function watchChannel(next: any): string | null {
   return watchInfo(next)?.channel?.id ?? null
 }
+
+/** Studio 的视频状态 → Item.status：草稿、已处理 / 公开、私享，其余（上传中、处理中）算审核中。 */
+function studioStatus(v: any): Item['status'] {
+  if (v.draftStatus === 'DRAFT_STATUS_DRAFT') return 'draft'
+  if (v.status === 'VIDEO_STATUS_REJECTED' || v.responseStatus?.statusCode === 'CREATOR_ENTITY_STATUS_REJECTED') return 'rejected'
+  if (v.privacy === 'VIDEO_PRIVACY_PRIVATE' || v.privacy === 'VIDEO_PRIVACY_UNLISTED') return 'private'
+  return v.status === 'VIDEO_STATUS_PROCESSED' ? 'published' : 'reviewing'
+}
+
+/** Studio creator/list_creator_videos 的一条视频。 */
+export function studioVideo(v: any, channelId: string): Item {
+  const m = v.metrics ?? {}
+  return n.item(
+    {
+      id: v.videoId,
+      kind: 'video',
+      url: videoUrl(v.videoId),
+      title: v.title ?? null,
+      text: v.description || null,
+      author: channelUser(channelId, null),
+      created_at: n.time(Number(v.timePublishedSeconds ?? v.timeCreatedSeconds) || null),
+      cover: thumb(v.thumbnailDetails),
+      stats: { views: n.count(m.viewCount), likes: n.count(m.likeCount), comments: n.count(m.commentCount) },
+      status: studioStatus(v),
+    },
+    v,
+  )
+}

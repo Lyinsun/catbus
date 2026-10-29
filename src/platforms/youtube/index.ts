@@ -1,4 +1,4 @@
-import { filter } from '../../core/options.js'
+import { filter, visibility } from '../../core/options.js'
 import { definePlatform, handlers } from '../../core/registry.js'
 
 /** 懒加载 web 端的 handler：只有执行到这条命令时才加载实现。 */
@@ -37,15 +37,19 @@ export default definePlatform({
           },
         }),
         'item related': impl('full', 'itemRelated'),
-        'item list': { upstream: 'none', note: '要走 YouTube Studio 的接口，尚未实现' },
+        'item list': impl('full', 'itemList', { note: '自己频道上传的视频，数据来自 YouTube Studio' }),
         'item media': impl('partial', 'itemMedia', { note: '最清晰的视频轨 + 音频轨（分轨）。走 ANDROID_VR 客户端、不带登录，同一出口 IP 请求过多会触发人机验证；年龄限制等视频拿不到' }),
         'item download': impl('partial', 'itemDownload', { note: '下载 item media 的视频轨和音频轨两个文件，不合流；只能完整下载 1 分钟以内的视频（没有 PO token 的地址只给前约 1 分钟）' }),
         'item like': impl('full', 'itemLike'),
         'item unlike': impl('full', 'itemUnlike', { note: '取消点赞（也会取消点踩）' }),
         'item collect': impl('full', 'itemCollect', { note: '加入稍后观看' }),
         'item uncollect': impl('full', 'itemUncollect', { note: '移出稍后观看' }),
-        'item publish': { upstream: 'none', note: '要走 YouTube Studio 的分片上传，尚未实现' },
-        'item delete': { upstream: 'none', note: '要走 YouTube Studio 的接口，尚未实现' },
+        'item publish': impl('full', 'itemPublish', {
+          supports: ['title', 'text', 'video', 'cover', 'tag', 'visibility', 'schedule'],
+          options: { visibility: visibility('public', 'private') },
+          note: '走 YouTube Studio 的分段上传，账号要先开频道；--schedule 先建成私享，到点转公开',
+        }),
+        'item delete': impl('full', 'itemDelete', { note: '只能删自己的视频' }),
 
         'comment list': impl('full', 'commentList'),
         'comment replies': impl('full', 'commentReplies', { note: '<comment> 为根评论 ID；YouTube 的回复只有一层' }),

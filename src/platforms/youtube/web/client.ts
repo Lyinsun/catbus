@@ -7,6 +7,7 @@ import type { HandlerContext } from '../../../core/registry.js'
 import { authError, httpClient, isGuest, jarOf } from '../../../core/toolkit.js'
 
 const ORIGIN = 'https://www.youtube.com'
+export const STUDIO_ORIGIN = 'https://studio.youtube.com'
 const BROWSER = 'chrome_149' as const
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36'
 /** 页面语言固定为英文：计数（`1.2M views`）和相对时间（`3 days ago`）按英文解析。 */
@@ -64,12 +65,23 @@ export class YtClient {
     return !isGuest(this.ctx) && SID_SCHEMES.some(([, name]) => this.jar.get(name))
   }
 
-  /** `Authorization: SAPISIDHASH <ts>_<sha1("<ts> <SAPISID> <origin>")> …`，与 web 端页面脚本一致。 */
-  authorization(): string | null {
+  readonly ua = UA
+
+  /** 取 HTML 页面（首页、Studio 首页）用的请求头。 */
+  pageHeaders(): HeaderPairs {
+    return [
+      ['User-Agent', UA],
+      ['Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'],
+      ['Accept-Language', ACCEPT_LANGUAGE],
+    ]
+  }
+
+  /** `Authorization: SAPISIDHASH <ts>_<sha1("<ts> <SAPISID> <origin>")> …`，与 web 端页面脚本一致；Studio 的 origin 不同。 */
+  authorization(origin = ORIGIN): string | null {
     const ts = String(rand.nowSeconds())
     const parts = SID_SCHEMES.flatMap(([scheme, name]) => {
       const sid = this.jar.get(name)
-      return sid ? [`${scheme} ${ts}_${sha1Hex(`${ts} ${sid} ${ORIGIN}`)}`] : []
+      return sid ? [`${scheme} ${ts}_${sha1Hex(`${ts} ${sid} ${origin}`)}`] : []
     })
     return parts.length ? parts.join(' ') : null
   }
@@ -88,11 +100,7 @@ export class YtClient {
     const res = await this.http.request({
       url: `${ORIGIN}/`,
       query: { hl: HL, gl: GL },
-      headers: [
-        ['User-Agent', UA],
-        ['Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'],
-        ['Accept-Language', ACCEPT_LANGUAGE],
-      ],
+      headers: this.pageHeaders(),
     })
     await this.check(res, '/')
     const html = await res.text()

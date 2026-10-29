@@ -11,10 +11,11 @@
 - **读（不用登录）**：`item search` / `get` / `related` / `media` / `download`；`comment list` / `replies`；`user get` / `search` / `items`；`series list` / `items`（播放列表）；`keyword suggest`；`live get` / `search` / `history` / `listen`（直播聊天）。
 - **读（要登录）**：`feed list`（首页推荐、订阅流）；`history list`；`notice list` / `count`；`user likes` / `collects`（稍后观看）/ `following`，这三个只能看自己的。
 - **写（要登录）**：`item like` / `unlike` / `collect` / `uncollect`（稍后观看）；`user follow` / `unfollow`（订阅频道）；`comment add` / `delete` / `like` / `unlike`。
+- **发布（要登录，账号要开频道）**：`item publish` / `list` / `delete`（自己上传的视频）。发布：`--video <文件> --title <标题>`，可选 `--text`、`--tag`、`--cover`、`--visibility public|private`、`--schedule <ISO 时间>`。
 
 ## 做不到
 
-`live send`（规划中）、`item publish` / `list` / `delete`（规划中）、`user update`、私信（YouTube 没有私信）、`keyword hot` 和热门流（趋势页已下线）、别人的点赞 / 订阅列表。
+`live send`（规划中）、`user update`、私信（YouTube 没有私信）、`keyword hot` 和热门流（趋势页已下线）、别人的点赞 / 订阅列表。
 
 ## 参数
 

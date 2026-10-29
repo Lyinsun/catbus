@@ -1,5 +1,5 @@
 import { CatbusError } from '../../../core/errors.js'
-import { type DownloadOptions, downloadMedia } from '../../../core/files.js'
+import { type DownloadOptions, downloadMedia, readMedia } from '../../../core/files.js'
 import { cookieCredential, finishLogin, loginContext } from '../../../core/login.js'
 import * as n from '../../../core/normalize.js'
 import * as rand from '../../../core/rand.js'
@@ -10,6 +10,7 @@ import { authError, isGuest, paged } from '../../../core/toolkit.js'
 import * as api from './api.js'
 import { VR_UA, type YtClient, yt } from './client.js'
 import * as norm from './normalize.js'
+import { dataUri, studio, studioConfig, uploadVideo } from './studio.js'
 import {
   CHANNEL_TAB,
   channelId,
@@ -580,3 +581,95 @@ export const commentLike = (ctx: Ctx) => actOnComment(ctx, 'like', '点赞评论
 export const commentUnlike = (ctx: Ctx) => actOnComment(ctx, 'unlike', '取消点赞评论')
 /** 只能删自己的评论。 */
 export const commentDelete = (ctx: Ctx) => actOnComment(ctx, 'delete', '删除评论')
+
+// ================================================================ Studio：发布、自己的视频、删除
+
+/** Studio 的可见范围。 */
+const PRIVACY = { public: 'PUBLIC', private: 'PRIVATE' } as const
+
+/**
+ * 发布视频：上传文件 → upload/createvideo 建视频（标题、简介、可见范围）→ 有标签、封面或定时发布时再 metadata_update。
+ * 需要登录，且账号要开了频道。
+ */
+export async function itemPublish(ctx: Ctx) {
+  const c = yt(ctx)
+  if (!c.loggedIn) throw authError(ctx, '发布视频需要登录')
+  const o = ctx.options as Record<string, any>
+  if (!o.video) throw new CatbusError('USAGE', 'YouTube 发布需要 --video', { hint: 'catbus youtube item publish --video <文件> --title <标题>' })
+  if (!o.title) throw new CatbusError('USAGE', 'YouTube 发布需要 --title')
+  const cfg = await studioConfig(c)
+  const video = await readMedia(c.http, o.video)
+  const cover = o.cover ? await readMedia(c.http, o.cover) : null
+  const uploaded = await uploadVideo(c, video.data)
+  // 定时发布：先建成私享，到点由 YouTube 转公开
+  const privacy = o.schedule ? 'PRIVATE' : PRIVACY[o.visibility as keyof typeof PRIVACY]
+  const created = await studio(c, cfg, 'upload/createvideo', {
+    channelId: cfg.channelId,
+    resourceId: { scottyResourceId: { id: uploaded.scottyResourceId } },
+    frontendUploadId: uploaded.frontendUploadId,
+    initialMetadata: {
+      title: { newTitle: o.title },
+      description: { newDescription: o.text ?? '', shouldSegment: true },
+      privacy: { newPrivacy: privacy },
+      draftState: { isDraft: false },
+    },
+  })
+  const id: string | undefined = created?.videoId
+  if (!id) throw new CatbusError('UPSTREAM', '视频已上传，但建视频没有返回 videoId', { hint: '到 https://studio.youtube.com 查看上传记录', detail: { keys: Object.keys(created ?? {}) } })
+  const update: Record<string, unknown> = {}
+  if (o.tag?.length) update.tags = { newTags: o.tag }
+  if (cover) update.videoStill = { operation: 'UPLOAD_CUSTOM_THUMBNAIL', image: { dataUri: dataUri(cover.data, cover.contentType) } }
+  if (o.schedule) update.scheduledPublishing = { set: { privacy: 'PUBLIC', timeSec: String(Math.floor(Date.parse(o.schedule) / 1000)) } }
+  if (Object.keys(update).length) {
+    const res = await studio(c, cfg, 'video_manager/metadata_update', { encryptedVideoId: id, ...update })
+    if (res?.overallResult?.resultCode && res.overallResult.resultCode !== 'UPDATE_SUCCESS') {
+      throw new CatbusError('UPSTREAM', `视频 ${id} 已发布，但标签 / 封面 / 定时发布没有设置成功：${res.overallResult.resultCode}`, {
+        hint: `到 https://studio.youtube.com/video/${id}/edit 手动设置`,
+        detail: { id, result: res.overallResult },
+      })
+    }
+  }
+  return n.item(
+    { id, kind: 'video', url: norm.videoUrl(id), title: o.title, text: o.text ?? null, author: norm.channelUser(cfg.channelId, null), status: privacy === 'PUBLIC' ? 'reviewing' : 'private' },
+    created,
+  )
+}
+
+/** 自己频道上传的视频，按发布时间倒序，数据来自 Studio 的 creator/list_creator_videos。 */
+export async function itemList(ctx: Ctx) {
+  const c = yt(ctx)
+  if (!c.loggedIn) throw authError(ctx, '查看自己的视频需要登录')
+  const cfg = await studioConfig(c)
+  const res = await studio(c, cfg, 'creator/list_creator_videos', {
+    filter: { and: { operands: [{ channelIdIs: { value: cfg.channelId } }, { videoOriginIs: { value: 'VIDEO_ORIGIN_UPLOAD' } }] } },
+    order: 'VIDEO_ORDER_DISPLAY_TIME_DESC',
+    pageSize: 30,
+    ...(ctx.cursor ? { pageToken: ctx.cursor } : {}),
+    mask: {
+      videoId: true,
+      title: true,
+      description: true,
+      thumbnailDetails: { all: true },
+      lengthSeconds: true,
+      privacy: true,
+      status: true,
+      draftStatus: true,
+      timePublishedSeconds: true,
+      timeCreatedSeconds: true,
+      metrics: { all: true },
+    },
+  })
+  const items = (res?.videos ?? []).map((v: any) => norm.studioVideo(v, cfg.channelId))
+  return paged(items, res?.nextPageToken, Boolean(res?.nextPageToken))
+}
+
+/** 删除自己的视频。 */
+export async function itemDelete(ctx: Ctx) {
+  const c = yt(ctx)
+  if (!c.loggedIn) throw authError(ctx, '删除视频需要登录')
+  const id = videoId(ctx.args.item!)
+  const cfg = await studioConfig(c)
+  const res = await studio(c, cfg, 'video/delete', { videoId: id })
+  checkWrite(res, '删除视频')
+  return { id }
+}
