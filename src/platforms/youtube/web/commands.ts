@@ -449,6 +449,26 @@ function chatNext(res: any): { token: string | null; wait: number } {
   return { token: data.continuation ?? null, wait: Math.min(Math.max(Number(data.timeoutMs) || 5000, 1000), 10_000) }
 }
 
+/**
+ * 发直播聊天消息：登录后打开聊天，输入框里带发送用的 params；没有输入框时（未登录、仅会员可发、慢速模式等）
+ * 返回里是一段说明文字，原样报出。YouTube 没有礼物接口（Super Chat 要付款），不支持 --gift。
+ */
+export async function liveSend(ctx: Ctx) {
+  const c = yt(ctx)
+  if (!c.loggedIn) throw authError(ctx, '发直播聊天需要登录')
+  const id = videoId(ctx.args.room!)
+  const chat = await openChat(c, id)
+  const params = norm.first(chat, 'sendLiveChatMessageEndpoint')?.params
+  if (typeof params !== 'string') {
+    const panel = norm.first(chat?.continuationContents?.liveChatContinuation?.actionPanel, 'liveChatRestrictedParticipationRenderer')
+    throw new CatbusError('UPSTREAM', `不能在这个直播间发消息${panel ? `：${norm.text(panel.message) ?? ''}` : ''}`, { hint: '常见原因：只有会员可以发言、账号没有频道、直播已结束', detail: { id } })
+  }
+  const res = await api.sendLiveChat(c, params, ctx.args.text!, rand.uuid4())
+  checkWrite(res, '发直播聊天')
+  const msg = norm.first(res, 'liveChatTextMessageRenderer')
+  return { id: msg?.id ?? id }
+}
+
 export async function liveHistory(ctx: Ctx) {
   return chatEvents(await openChat(yt(ctx), videoId(ctx.args.room!)))
 }

@@ -1,5 +1,6 @@
 import { filter, visibility } from '../../core/options.js'
 import { definePlatform, handlers } from '../../core/registry.js'
+import { VOCAB } from '../../core/vocab.js'
 
 /** 懒加载 web 端的 handler：只有执行到这条命令时才加载实现。 */
 const { impl } = handlers(() => import('./web/commands.js'))
@@ -68,7 +69,10 @@ export default definePlatform({
         'live search': impl('full', 'liveSearch'),
         'live listen': impl('full', 'liveListen', { note: '轮询直播聊天：文字消息、Super Chat、会员' }),
         'live history': impl('full', 'liveHistory'),
-        'live send': { upstream: 'none', note: 'live_chat/send_message 尚未实现' },
+        'live send': impl('full', 'liveSend', {
+          check: (a, o) => (o.gift != null ? 'YouTube 不支持送礼（Super Chat 需要付款），只能发文字' : VOCAB['live send']!.check?.(a, o)),
+          note: '只发文字；不支持 --gift',
+        }),
 
         'keyword suggest': impl('full', 'keywordSuggest'),
 

@@ -74,6 +74,11 @@ export function createReply(c: YtClient, commentText: string, createReplyParams:
   return c.innertube('comment/create_comment_reply', { commentText, createReplyParams })
 }
 
+/** 发直播聊天消息：params 取自登录后 get_live_chat 返回的输入框（sendLiveChatMessageEndpoint）。 */
+export function sendLiveChat(c: YtClient, params: string, text: string, clientMessageId: string) {
+  return c.innertube('live_chat/send_message', { params, clientMessageId, richMessage: { textSegments: [{ text }] } })
+}
+
 export function commentAction(c: YtClient, actions: string[]) {
   return c.innertube('comment/perform_comment_action', { actions })
 }

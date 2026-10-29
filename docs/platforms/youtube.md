@@ -8,7 +8,7 @@
 | 上游仓库 | 无（直接对接 YouTube 网页背后的 InnerTube 接口 `/youtubei/v1/`） |
 | 接口来源 | 记录在 [`src/platforms/youtube/UPSTREAM`](../../src/platforms/youtube/UPSTREAM) |
 | 端 | web ✓ · app ○ 规划中 · pc ○ 规划中 |
-| 命令（web） | 已实现 39 条（✓ 37 · ◐ 2），规划中 ○ 4 条 |
+| 命令（web） | 已实现 43 条（✓ 41 · ◐ 2） |
 
 命令表与 `catbus platforms youtube` 一致；选项以 `catbus youtube <resource> <action> --help` 为准。通用的命令语法、输出结构见 [AGENTS.md 第 4 节](../../AGENTS.md#4-命令规范)。
 
@@ -90,7 +90,9 @@ catbus config set youtube.proxy http://127.0.0.1:7890
 | `item unlike` | ✓ | 取消点赞（也会取消点踩）。需要登录。 |
 | `item collect` | ✓ | 加入「稍后观看」。需要登录。 |
 | `item uncollect` | ✓ | 移出「稍后观看」。需要登录。 |
-| `item list`、`item publish`、`item delete` | ○ | 规划中（YouTube Studio 接口） |
+| `item list` | ✓ | 自己频道上传的视频（含私享、草稿），按发布时间倒序，数据来自 YouTube Studio。需要登录。 |
+| `item publish` | ✓ | 发布视频：`--video` 与 `--title` 必填，可选 `--text`（简介）、`--tag`、`--cover`（缩略图）、`--visibility public\|private`、`--schedule`（先建成私享，到点转公开）。走 YouTube Studio 的分段上传。需要登录，账号要先开频道。 |
+| `item delete` | ✓ | 删除自己的视频。需要登录。 |
 
 ### comment
 
@@ -117,7 +119,7 @@ catbus config set youtube.proxy http://127.0.0.1:7890
 | `live search` | ✓ | 搜索正在直播的视频。 |
 | `live history` | ✓ | 直播聊天里最近的消息。取「Live chat」视图（全部消息），不是默认的「Top chat」（YouTube 筛选过的）。 |
 | `live listen` | ✓ | 持续输出直播聊天：文字消息（`chat`）、Super Chat 与 Super Sticker（`gift`）、会员相关（`gift` / `other`）。按服务端给的间隔轮询（约 10 秒一次），不是长连接；开始时已有的历史消息不输出；同样取「Live chat」视图。 |
-| `live send` | ○ | 规划中 |
+| `live send` | ✓ | 发直播聊天文字消息。需要登录；只有会员能发言的直播间、慢速模式等限制按 YouTube 的提示报错。不支持 `--gift`（Super Chat 需要付款）。 |
 
 ### keyword / notice / series / history
 
@@ -177,4 +179,4 @@ catbus youtube comment add dQw4w9WgXcQ "Nice video"
 - **页面语言固定为英文**（`hl=en`），只影响 YouTube 自己生成的文字，标题和简介保持原文。
 - **没有私信**：YouTube 2019 年已下线私信，`msg` 命令都不支持。
 - **没有热门**：YouTube 已下线「趋势」页，`feed list --kind hot`、`keyword hot` 都不支持。
-- **规划中**：`live send`；`item publish` / `list` / `delete`（YouTube Studio 接口）。修改频道资料（`user update`）还不支持。
+- 修改频道资料（`user update`）还不支持。

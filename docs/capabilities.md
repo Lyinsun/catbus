@@ -258,7 +258,7 @@
 | live categories | ✓ | ○ | ✓ | ✓ | ✓ | ○ | — | ○ | — | — | — | — | — |
 | live listen | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | — | ○ | — | — | ✓ | — | — |
 | live history | ○ | ◐ | ◐ | ✓ | ○ | ○ | — | ○ | — | — | ✓ | — | — |
-| live send | ◐ | ◐ | ◐ | ✓ | ○ | ○ | — | ○ | — | — | ○ | — | — |
+| live send | ◐ | ◐ | ◐ | ✓ | ○ | ○ | — | ○ | — | — | ✓ | — | — |
 | live like / rank | ○ | ✓ | ✓ | ○ | ○ | ○ | — | ○ | — | — | — | — | — |
 | live gifts | ✓ | ○ | ✓ | ✓ | ✓ | ○ | — | ○ | — | — | — | — | — |
 | live products | ✓ | ✓ | ○ | — | ○ | ○ | — | ○ | — | — | — | — | — |
@@ -274,7 +274,7 @@
 - xhs `live send`：--gift 规划中
 - douyin `live send`：--gift 规划中
 - tiktok `live send`：--gift 规划中
-- youtube `live send`：live_chat/send_message 尚未实现
+- youtube `live send`：只发文字；不支持 --gift
 - douyin `live media`：拉流地址取自房间资料（room/web/enter）
 - tiktok `live media`：上游没有解析拉流地址：取自 /api-live/user/room 的 liveRoom.streamData，或 room/enter 的 stream_url
 - `live list --category`：xhs
