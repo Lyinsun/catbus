@@ -302,7 +302,7 @@ export function updateSign(b: Bili, sign: string) {
   return b.json({ method: 'POST', url: `${API}/x/member/web/sign/update`, headers: h.get(), form })
 }
 
-/** 换头像：图片直接 multipart 上传，不用先传 bfs。网页端只收 png / jpg，不超过 2MB。 */
+/** 换头像：图片直接 multipart 上传，不用先传 bfs。 */
 export function updateFace(b: Bili, data: Uint8Array, filename: string, contentType: string) {
   const h = headers('GET', { origin: ORIGIN.account }).referer(`${ORIGIN.account}/account/face/upload`)
   const multipart: MultipartPart[] = [

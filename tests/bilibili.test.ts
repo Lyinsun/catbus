@@ -1140,27 +1140,22 @@ describe('bilibili user update（非上游，没有对拍）', () => {
     expect(taken.error).toMatchObject({ code: 'UPSTREAM', message: '昵称已被占用', hint: '可用的昵称：新名_1、新名2026', detail: { code: 40014 } })
     const long = await runCommand('userUpdate', { options: { bio: 'x'.repeat(80) } }, route({ 'sign/update': { code: 40022, message: '签名过长' } }))
     expect(long.error).toMatchObject({ code: 'UPSTREAM', message: '签名太长，最多 70 字', detail: { code: 40022 } })
+    // data.code 不在表里时用 data.message，不用顶层的 '0'
+    const other = await runCommand('userUpdate', { options: { name: '新名' } }, route({ '/x/member/web/update': ok({ code: 40099, message: '昵称不合规' }) }))
+    expect(other.error).toMatchObject({ code: 'UPSTREAM', message: '昵称不合规', detail: { code: 40099 } })
   })
 
   it('--avatar：图片 multipart 直传，csrf 在 query 里；格式不对报 USAGE，不发请求', async () => {
-    const sent: { url: string; multipart: { name: string; filename?: string; contentType?: string; data: unknown }[] | null }[] = []
-    const restoreRand = deterministic({ now: NOW })
-    const restore = mockSender((p) => {
-      sent.push({ url: p.url, multipart: p.multipart as any })
-      const body = p.url.includes('face/update') ? { code: 0, message: 'OK', ttl: 1, data: 'http://i2.hdslb.com/bfs/face/new.jpg' } : route()(p.url)
-      return fakeResponse(body as object, { headers: [['content-type', 'application/json']], url: p.url })
-    })
-    let result: any
-    try {
-      result = await commands.userUpdate({ ...loggedCtx(), args: {}, options: { avatar: IMAGE_FILE }, cursor: null } as any)
-    } finally {
-      restore()
-      restoreRand()
-    }
-    expect(sent[0]!.url).toBe(`https://api.bilibili.com/x/member/web/face/update?csrf=${CSRF}`)
+    const { requests, result, error } = await runCommand(
+      'userUpdate',
+      { options: { avatar: IMAGE_FILE } },
+      route({ 'face/update': { code: 0, message: 'OK', ttl: 1, data: 'http://i2.hdslb.com/bfs/face/new.jpg' } }),
+    )
+    expect(error).toBeUndefined()
+    expect(requests[0]!.url).toBe(`https://api.bilibili.com/x/member/web/face/update?csrf=${CSRF}`)
     // 头像用接口返回的新地址，不等空间资料刷新
     expect(result.avatar).toBe('https://i2.hdslb.com/bfs/face/new.jpg')
-    expect(sent[0]!.multipart!.map((m) => [m.name, m.filename ?? null, m.contentType ?? null])).toEqual([
+    expect(requests[0]!.multipart!.map((m) => [m.name, m.filename ?? null, m.contentType ?? null])).toEqual([
       ['dopost', null, null],
       ['DisplayRank', null, null],
       ['face', 'pic.png', 'image/png'],

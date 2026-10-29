@@ -137,7 +137,6 @@ export async function userSearch(ctx: Ctx) {
   return paged(list, p + 1, p < Number(d.numPages ?? 0))
 }
 
-/** 头像：网页端只收 png / jpg，不超过 2MB（超了服务端报 40013）。 */
 const FACE_TYPES = new Set(['image/jpeg', 'image/png'])
 const FACE_MAX = 2 * 1024 * 1024
 
@@ -154,15 +153,16 @@ const PROFILE_ERRORS: Record<number, string> = {
 }
 
 function checkProfile(ctx: Ctx, body: any): void {
-  const code = Number(body?.code ?? 0)
-  const inner = Number(body?.data?.code ?? 0)
-  const bad = code !== 0 ? code : inner
+  const top = Number(body?.code ?? 0)
+  const bad = top !== 0 ? top : Number(body?.data?.code ?? 0)
   if (bad === 0) return
-  if (code !== 0 && !PROFILE_ERRORS[code]) check(ctx, body)
+  const known = PROFILE_ERRORS[bad]
+  // 表里没有的顶层错误码交给通用的 check（登录失效、风控等）
+  if (top !== 0 && !known) check(ctx, body)
   const names: string[] = (body?.data?.name_list ?? []).map(String)
-  throw new CatbusError('UPSTREAM', PROFILE_ERRORS[bad] ?? String(body?.message || body?.data?.message || `B 站返回错误 ${bad}`), {
+  throw new CatbusError('UPSTREAM', known ?? String(body?.data?.message || `B 站返回错误 ${bad}`), {
     hint: names.length ? `可用的昵称：${names.join('、')}` : undefined,
-    detail: { code: bad, message: body?.message ?? null },
+    detail: { code: bad, message: body?.data?.message ?? body?.message ?? null },
   })
 }
 
