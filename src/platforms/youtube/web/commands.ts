@@ -8,7 +8,7 @@ import { type AuthStatus, type Event, type Keyword, RAW, type UserRef } from '..
 import { reconnecting } from '../../../core/stream.js'
 import { authError, isGuest, paged } from '../../../core/toolkit.js'
 import * as api from './api.js'
-import { VR_UA, type YtClient, yt } from './client.js'
+import { MEDIA_UA, type YtClient, yt } from './client.js'
 import * as norm from './normalize.js'
 import { dataUri, studio, studioConfig, uploadVideo } from './studio.js'
 import {
@@ -226,7 +226,7 @@ function assertVideo(ctx: Ctx, player: any, id: string): void {
   throw new CatbusError('UPSTREAM', `视频不可用：${reason}`, { detail: { status: ps.status ?? null, reason, id } })
 }
 
-/** 媒体地址：ANDROID_VR 客户端的 player。人机验证、年龄限制等拿不到地址时按 playabilityStatus 报错。 */
+/** 媒体地址：VISIONOS 客户端的 player。人机验证、年龄限制等拿不到地址时按 playabilityStatus 报错。 */
 async function mediaOf(c: YtClient, id: string) {
   const player = await c.mediaPlayer(id)
   const ps = player?.playabilityStatus ?? {}
@@ -251,21 +251,11 @@ export async function itemDownload(ctx: Ctx) {
   const c = yt(ctx)
   const id = videoId(ctx.args.item!)
   const media = await mediaOf(c, id)
-  return downloadMedia(ctx, c.http, id, media, downloadOptions).catch((err) => {
-    // 实测（2026-10-24）：没有 PO token 的地址只给前约 1 分钟的数据，之后的分段回 403
-    const d = err instanceof CatbusError ? (err.detail as { status?: number; range?: number[] } | null) : null
-    if (d?.status === 403 && (d.range?.[0] ?? 0) > 0) {
-      throw new CatbusError('UPSTREAM', 'YouTube 只允许下载这个视频的前约 1 分钟（没有 PO token 的地址超过 1 分钟后回 403）', {
-        hint: '目前只能完整下载 1 分钟以内的视频（如 Shorts）',
-        detail: d,
-      })
-    }
-    throw err
-  })
+  return downloadMedia(ctx, c.http, id, media, downloadOptions)
 }
 
 const downloadOptions: DownloadOptions = {
-  headers: [['User-Agent', VR_UA]],
+  headers: [['User-Agent', MEDIA_UA]],
   ext: (m) => norm.formatExt((m as any)[RAW]?.mimeType),
   // googlevideo 拒绝整文件请求（403），不分段时还会被限速：按 10 MB 一段用 range 参数下载（与 yt-dlp 相同）
   chunked: (m) => {

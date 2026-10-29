@@ -99,9 +99,9 @@
 - douyin `item list`：取发布页的作品预览（work_list）；定时未发布的作品 status 为 draft
 - youtube `item list`：自己频道上传的视频，数据来自 YouTube Studio
 - tiktok `item media`：媒体地址取自视频详情（video.playAddr，图文取 imagePost），上游没有单独的解析接口
-- youtube `item media`：最清晰的视频轨 + 音频轨（分轨）。走 ANDROID_VR 客户端、不带登录，同一出口 IP 请求过多会触发人机验证；年龄限制等视频拿不到
+- youtube `item media`：最清晰的视频轨 + 音频轨（分轨）。走 VISIONOS 客户端、不带登录，同一出口 IP 请求过多会触发人机验证；年龄限制等视频拿不到
 - tiktok `item download`：媒体地址同 item media
-- youtube `item download`：下载 item media 的视频轨和音频轨两个文件，不合流；只能完整下载 1 分钟以内的视频（没有 PO token 的地址只给前约 1 分钟）
+- youtube `item download`：下载 item media 的视频轨和音频轨两个文件，不合流
 - youtube `item unlike`：取消点赞（也会取消点踩）
 - youtube `item collect`：加入稍后观看
 - youtube `item uncollect`：移出稍后观看

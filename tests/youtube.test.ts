@@ -389,12 +389,13 @@ describe('youtube 平台（web）', () => {
       },
     }
 
-    it('item media：ANDROID_VR 客户端、不带 cookie；同高度优先 mp4，音频优先 m4a', async () => {
+    it('item media：VISIONOS 客户端、不带 cookie；同高度优先 mp4，音频优先 m4a', async () => {
       await login()
       const r = await withYt({ player: () => vr }, async (calls) => {
         const r = await cli('youtube', 'item', 'media', 'dQw4w9WgXcQ')
         const call = calls.find((c) => c.path === 'player')!
-        expect(call.body.context.client.clientName).toBe('ANDROID_VR')
+        expect(call.body.context.client.clientName).toBe('VISIONOS')
+        expect(call.headers).toContainEqual(['X-Youtube-Client-Name', '101'])
         expect(call.cookies).toEqual([])
         expect(call.headers.map(([k]) => k)).not.toContain('Authorization')
         return r
@@ -430,19 +431,6 @@ describe('youtube 平台（web）', () => {
       expect(ranges).toEqual([`/v:0-${10 * MB - 1}`, `/v:${10 * MB}-${20 * MB - 1}`, `/v:${20 * MB}-${25 * MB - 1}`, '/a:0-4'])
       expect(readFileSync(join(dir, 'youtube_dQw4w9WgXcQ_1.mp4'), 'utf8')).toBe(`[0-${10 * MB - 1}][${10 * MB}-${20 * MB - 1}][${20 * MB}-${25 * MB - 1}]`)
       expect(r.env.data.map((f: any) => basename(f.path))).toEqual(['youtube_dQw4w9WgXcQ_1.mp4', 'youtube_dQw4w9WgXcQ_2.m4a'])
-    })
-
-    it('item download：超过约 1 分钟的部分回 403 时，报错说明只能下载前 1 分钟', async () => {
-      const MB = 1024 * 1024
-      const vr3 = { playabilityStatus: { status: 'OK' }, streamingData: { adaptiveFormats: [
-        { itag: 137, url: 'https://media.example/v?id=1', mimeType: 'video/mp4', height: 1080, contentLength: String(25 * MB) },
-        { itag: 140, url: 'https://media.example/a?id=2', mimeType: 'audio/mp4', contentLength: '5' },
-      ] } }
-      // 2026-10-24 真机：第一段 200，之后的分段 403
-      const media = (_: unknown, p: PreparedRequest) => (new URL(p.url).searchParams.get('range')!.startsWith('0-') ? fakeResponse('x') : fakeResponse('', { status: 403 }))
-      const r = await withYt({ player: () => vr3, '/v': media, '/a': media }, () => cli('youtube', 'item', 'download', 'dQw4w9WgXcQ', '--dir', join(home.dir, 'dl')))
-      expect(r.env.error).toMatchObject({ code: 'UPSTREAM', hint: '目前只能完整下载 1 分钟以内的视频（如 Shorts）' })
-      expect(r.env.error.message).toContain('前约 1 分钟')
     })
 
     it('item media：人机验证报 RISK_CONTROL', async () => {
@@ -614,7 +602,7 @@ describe('youtube 平台（web）', () => {
       expect(r2.env.error).toMatchObject({ message: '正在直播的视频没有评论区，只有直播聊天', hint: 'catbus youtube live history liveVideo01' })
     })
 
-    it('item media：ANDROID_VR 响应的 Set-Cookie 不写回账号凭证', async () => {
+    it('item media：VISIONOS 响应的 Set-Cookie 不写回账号凭证', async () => {
       await login()
       const vr = { playabilityStatus: { status: 'OK' }, streamingData: { formats: [{ itag: 18, url: 'https://media.example/18', mimeType: 'video/mp4', height: 360 }] } }
       await withYt({ player: () => fakeResponse(vr, { headers: [['set-cookie', 'VISITOR_INFO1_LIVE=other-visitor; Domain=.youtube.com; Path=/']] }) }, () => cli('youtube', 'item', 'media', 'dQw4w9WgXcQ'))

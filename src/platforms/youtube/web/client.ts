@@ -24,17 +24,20 @@ interface YtConfig {
   fetchedAt: number
 }
 
-/** 取媒体地址用的 ANDROID_VR（Quest 上的 YouTube）客户端，版本号与 yt-dlp 使用的一致。 */
-const VR_CLIENT = {
-  clientName: 'ANDROID_VR',
-  clientVersion: '1.65.10',
-  deviceMake: 'Oculus',
-  deviceModel: 'Quest 3',
-  androidSdkVersion: 32,
-  osName: 'Android',
-  osVersion: '12L',
+/**
+ * 取媒体地址用的 VISIONOS（Vision Pro 上的 YouTube）客户端，与 yt-dlp 使用的一致。
+ * 实测（2026-10-29）：它给的直链不带 PO token 也能完整下载；ANDROID_VR 的地址只给前约 1 分钟，之后回 403。
+ */
+const MEDIA_CLIENT = {
+  clientName: 'VISIONOS',
+  clientVersion: '1.02',
+  deviceMake: 'Apple',
+  deviceModel: 'RealityDevice17,1',
+  osName: 'visionOS',
+  osVersion: '26.5.23O471',
 }
-export const VR_UA = 'com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip'
+const MEDIA_CLIENT_ID = '101'
+export const MEDIA_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15'
 
 /** 会改动账号数据的 InnerTube 接口：网络出错时不自动重试。 */
 const WRITE_PATH = /^(like|subscription|comment|browse\/edit_playlist|live_chat\/send|playlist|upload)\//
@@ -48,7 +51,7 @@ const SID_SCHEMES: [string, string][] = [
 
 export class YtClient {
   readonly http: HttpClient
-  /** 游客请求（ANDROID_VR）用：没有 cookie 罐，响应的 Set-Cookie 不会写回当前账号。 */
+  /** 游客请求（取媒体地址）用：没有 cookie 罐，响应的 Set-Cookie 不会写回当前账号。 */
   private readonly bare: HttpClient
   readonly jar: CookieJar
   /** 同一命令里并发的请求（item get 的 player + next）共用一次首页请求。 */
@@ -145,17 +148,19 @@ export class YtClient {
   }
 
   /**
-   * 取媒体地址用的 player 请求：WEB 客户端只给 SABR 流或要签名解算的地址，ANDROID_VR 客户端直接给可下载的地址。
+   * 取媒体地址用的 player 请求：WEB 客户端只给 SABR 流或要签名解算的地址，VISIONOS 客户端直接给可下载的地址。
    * 这个客户端不支持 cookie，一律以游客身份请求；同一出口 IP 请求过多时会被要求「Sign in to confirm you're not a bot」。
    */
   async mediaPlayer<T = any>(videoId: string): Promise<T> {
     const cfg = await this.config()
     const headers: HeaderPairs = [
-      ['User-Agent', VR_UA],
+      ['User-Agent', MEDIA_UA],
       ['Content-Type', 'application/json'],
       ['X-Goog-Visitor-Id', cfg.visitorData],
+      ['X-Youtube-Client-Name', MEDIA_CLIENT_ID],
+      ['X-Youtube-Client-Version', MEDIA_CLIENT.clientVersion],
     ]
-    const client = { ...VR_CLIENT, hl: HL, gl: GL, visitorData: cfg.visitorData }
+    const client = { ...MEDIA_CLIENT, hl: HL, gl: GL, visitorData: cfg.visitorData }
     return this.post('player', headers, { context: { client }, ...playerBody(videoId) }, this.bare)
   }
 
@@ -214,7 +219,7 @@ function loggedInFlag(res: any): string | null {
   return null
 }
 
-/** player 请求体里除 context 以外的部分：WEB 与 ANDROID_VR 相同。 */
+/** player 请求体里除 context 以外的部分：WEB 与 VISIONOS 相同。 */
 export function playerBody(videoId: string) {
   return { videoId, contentCheckOk: true, racyCheckOk: true }
 }
