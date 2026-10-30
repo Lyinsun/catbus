@@ -10,6 +10,7 @@ import { authError, isGuest, paged } from '../../../core/toolkit.js'
 import * as api from './api.js'
 import { MEDIA_UA, type YtClient, yt } from './client.js'
 import * as norm from './normalize.js'
+import { deleteVideo, publishVideo } from './publish.js'
 import { studio, studioConfig } from './studio.js'
 import {
   CHANNEL_TAB,
@@ -607,7 +608,13 @@ export const commentUnlike = (ctx: Ctx) => actOnComment(ctx, 'unlike', '取消�
 /** 只能删自己的评论。 */
 export const commentDelete = (ctx: Ctx) => actOnComment(ctx, 'delete', '删除评论')
 
-// ================================================================ Studio：自己的视频
+// ================================================================ Studio：发布、自己的视频、删除
+
+/** 发布视频（BotGuard 在无头 Chromium 里算，见 publish.ts）。 */
+export const itemPublish = (ctx: Ctx) => publishVideo(ctx)
+
+/** 删除自己的视频。 */
+export const itemDelete = (ctx: Ctx) => deleteVideo(ctx)
 
 /** 自己频道上传的视频，按发布时间倒序，数据来自 Studio 的 creator/list_creator_videos。 */
 export async function itemList(ctx: Ctx) {

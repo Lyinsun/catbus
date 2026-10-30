@@ -1,12 +1,16 @@
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { RequestError } from 'wreq-js'
+import { CookieJar } from '../src/core/cookies.js'
 import { fakeResponse, type HttpResponse, mockSender, type PreparedRequest } from '../src/core/http.js'
 import { decode, int, str } from '../src/core/pb.js'
 import * as rand from '../src/core/rand.js'
 import youtube from '../src/platforms/youtube/index.js'
+import { type BrowserCookie, browser, findChrome, type OpenOptions } from '../src/platforms/youtube/web/browser.js'
 import { count, relTime } from '../src/platforms/youtube/web/normalize.js'
+import { cookieKey, syncCookies } from '../src/platforms/youtube/web/publish.js'
 import {
   commentAction,
   createCommentParams,
@@ -733,9 +737,330 @@ describe('youtube 平台（web）', () => {
       })
     })
 
-    it('item publish / delete 规划中：报 NOT_IMPLEMENTED，不上传文件', async () => {
-      const r = await cli('youtube', 'item', 'publish', '--video', 'x.mp4', '--title', 't')
-      expect(r.env.error.code).toBe('NOT_IMPLEMENTED')
+    describe('item publish / delete（Studio：BotGuard 在无头浏览器里算，其余请求由 Node 发出）', () => {
+      const VIDEO_ID = 'NEWVID1234A'
+      const INTERP = 'https://www.youtube.com/s/botguard/interp.js'
+      const STUDIO_HOME = `<script>ytcfg.set({"INNERTUBE_CLIENT_VERSION":"1.20261030.00.00","INNERTUBE_API_KEY":"fake-key","CHANNEL_ID":"${ME}","INNERTUBE_CONTEXT_SERIALIZED_DELEGATION_CONTEXT":"FAKE_SDC"});</script>`
+      const bgChallenge = (tag: string) => ({ program: `PROG-${tag}`, interpreterUrl: { privateDoNotAccessOrElseTrustedResourceUrlWrappedValue: INTERP } })
+      const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47])
+      let savedBrowser: string | undefined
+      let video: string
+      let cover: string
+
+      beforeEach(() => {
+        savedBrowser = process.env.CATBUS_YOUTUBE_BROWSER
+        // 浏览器由 fakeBrowser 替换，这里只需要一个存在的文件通过查找
+        process.env.CATBUS_YOUTUBE_BROWSER = process.execPath
+        video = join(home.dir, 'ytv.mp4')
+        cover = join(home.dir, 'cover.png')
+        writeFileSync(video, 'fake-video-bytes')
+        writeFileSync(cover, PNG)
+      })
+      afterEach(() => {
+        if (savedBrowser === undefined) delete process.env.CATBUS_YOUTUBE_BROWSER
+        else process.env.CATBUS_YOUTUBE_BROWSER = savedBrowser
+        vi.restoreAllMocks()
+      })
+
+      /** 假浏览器：记录每次 BotGuard 的 binding，返回按调用次序编号的 WEB<n>。 */
+      function fakeBrowser(opts: { url?: string; fresh?: BrowserCookie[] } = {}) {
+        const attests: { binding: any }[] = []
+        const opened: OpenOptions[] = []
+        const state = { closed: 0 }
+        vi.spyOn(browser, 'open').mockImplementation(async (o) => {
+          opened.push(o)
+          return {
+            url: opts.url ?? `https://studio.youtube.com/channel/${ME}/videos/upload`,
+            attest: async (req) => {
+              attests.push({ binding: req.binding })
+              return `WEB${attests.length}`
+            },
+            cookies: async () => opts.fresh ?? [],
+            close: async () => {
+              state.closed++
+            },
+          }
+        })
+        return { attests, opened, state }
+      }
+
+      /** Studio 路由：att/get 给两种挑战，esr 直接给令牌；上传按录制的形状给。 */
+      function studioRoutes(extra: Record<string, Route> = {}): Record<string, Route> {
+        return {
+          'studio:/': () => fakeResponse(STUDIO_HOME, { headers: [['content-type', 'text/html']] }),
+          'studio:att/get': (body) =>
+            body.engagementType === 'ENGAGEMENT_TYPE_UNBOUND' ? { challenge: 'CH2', bgChallenge: bgChallenge('unbound') } : { challenge: 'CH1', bgChallenge: bgChallenge('studio') },
+          'studio:att/esr': () => ({ sessionToken: 'TOKEN1' }),
+          '/s/botguard/interp.js': () => fakeResponse('/* interpreter */', { headers: [['content-type', 'text/javascript']] }),
+          '/upload/studio': () => fakeResponse('', { headers: [['x-goog-upload-url', 'https://upload.youtube.com/session/1']] }),
+          '/session/1': () => fakeResponse('{"scottyResourceId":"SCOTTY1"}', { headers: [['content-type', 'application/json']] }),
+          'studio:upload/createvideo': () => ({ videoId: VIDEO_ID }),
+          'studio:video/delete': () => ({ success: true }),
+          ...extra,
+        }
+      }
+
+      it('publish：Node 上传并建视频；浏览器只算两次 BotGuard；建视频带会话令牌与校验结果', async () => {
+        const b = fakeBrowser()
+        await withYt(studioRoutes(), async (calls) => {
+          const r = await cli('youtube', 'item', 'publish', '--video', video, '--title', 'hello', '--text', 'desc', '--visibility', 'private')
+          expect(r.env.ok).toBe(true)
+          expect(r.env.data).toMatchObject({ id: VIDEO_ID, kind: 'video', title: 'hello', url: `https://www.youtube.com/watch?v=${VIDEO_ID}` })
+          // 第一次是会话令牌的 atr_challenge，第二次是上传完成后 UNBOUND 挑战加 scottyResourceId
+          expect(b.attests.map((a) => a.binding)).toEqual([{ atr_challenge: 'CH1' }, { c: 'CH2', e: 'ENGAGEMENT_TYPE_VIDEO_UPLOAD', scottyResourceId: 'SCOTTY1' }])
+          const create = calls.find((c) => c.path === 'studio:upload/createvideo')!
+          expect(create.body.resourceId).toEqual({ scottyResourceId: { id: 'SCOTTY1' } })
+          expect(create.body.initialMetadata).toMatchObject({ title: { newTitle: 'hello' }, privacy: { newPrivacy: 'PRIVATE' }, description: { newDescription: 'desc' } })
+          expect(create.body.context.request).toMatchObject({ sessionInfo: { token: 'TOKEN1' }, attestationResponseData: { challenge: 'CH2', webResponse: 'WEB2' } })
+          expect(create.body.context.user.serializedDelegationContext).toBe('FAKE_SDC')
+          const upload = calls.find((c) => c.path === '/upload/studio')!
+          expect(upload.headers.find(([k]) => k.toLowerCase() === 'x-goog-upload-file-name')![1]).toBe('ytv.mp4')
+          expect(b.opened[0]!.url).toBe(`https://studio.youtube.com/channel/${ME}/videos/upload?d=ud`)
+          expect(b.state.closed).toBe(1)
+        })
+      })
+
+      it('publish：标签、封面走 metadata_update；定时发布先建成私享，metadata_update 里转公开', async () => {
+        fakeBrowser()
+        const when = '2026-11-01T20:00:00+08:00'
+        await withYt(studioRoutes({ 'studio:video_manager/metadata_update': () => ({ overallResult: { resultCode: 'UPDATE_SUCCESS' } }) }), async (calls) => {
+          const r = await cli('youtube', 'item', 'publish', '--video', video, '--title', 't', '--tag', 'a', '--tag', 'b', '--cover', cover, '--schedule', when)
+          expect(r.env.ok).toBe(true)
+          expect(r.env.data.status).toBe('private')
+          expect(calls.find((c) => c.path === 'studio:upload/createvideo')!.body.initialMetadata.privacy).toEqual({ newPrivacy: 'PRIVATE' })
+          const meta = calls.find((c) => c.path === 'studio:video_manager/metadata_update')!
+          expect(meta.body).toMatchObject({
+            encryptedVideoId: VIDEO_ID,
+            tags: { newTags: ['a', 'b'] },
+            videoStill: { operation: 'UPLOAD_CUSTOM_THUMBNAIL', image: { dataUri: `data:image/png;base64,${PNG.toString('base64')}` } },
+            scheduledPublishing: { set: { privacy: 'PUBLIC', timeSec: String(Date.parse(when) / 1000) } },
+          })
+          expect(meta.body.context.request.sessionInfo).toEqual({ token: 'TOKEN1' })
+        })
+      })
+
+      it('publish：定时时间已经过去时报 USAGE，不上传', async () => {
+        await withYt({}, async (calls) => {
+          const r = await cli('youtube', 'item', 'publish', '--video', video, '--title', 't', '--schedule', '2020-01-01T00:00:00Z')
+          expect(r.env.error.code).toBe('USAGE')
+          expect(calls).toHaveLength(0)
+        })
+      })
+
+      it('publish：视频已建好但元数据没设置成功时报 UPSTREAM，并给出视频 ID', async () => {
+        fakeBrowser()
+        const r = await withYt(studioRoutes({ 'studio:video_manager/metadata_update': () => ({ overallResult: { resultCode: 'UPDATE_FAILED_RETRY' } }) }), () =>
+          cli('youtube', 'item', 'publish', '--video', video, '--title', 't', '--tag', 'a'),
+        )
+        expect(r.env.error).toMatchObject({ code: 'UPSTREAM', message: `视频 ${VIDEO_ID} 已建好，但标签 / 封面 / 定时发布没有设置成功（YouTube 返回 UPDATE_FAILED_RETRY）` })
+      })
+
+      it('publish：metadata_update 按字段返回 success，失败的字段名写进报错，并提示自定义封面的验证', async () => {
+        fakeBrowser()
+        const partial = { overallResult: { resultCode: 'SOME_ERRORS' }, tags: { success: true }, videoStill: { success: false }, scheduledPublishing: { success: true } }
+        const r = await withYt(studioRoutes({ 'studio:video_manager/metadata_update': () => partial }), () =>
+          cli('youtube', 'item', 'publish', '--video', video, '--title', 't', '--tag', 'catbustest', '--cover', cover),
+        )
+        expect(r.env.error).toMatchObject({ code: 'UPSTREAM', message: `视频 ${VIDEO_ID} 已建好，但封面没有设置成功（YouTube 返回 SOME_ERRORS）`, detail: { failed: ['封面'] } })
+        expect(r.env.error.hint).toMatch(/自定义封面/)
+      })
+
+      it('publish：上传被拒（当天上传数超限）时报 RISK_CONTROL，并说明 YouTube 给的原因，不说「没有建成」', async () => {
+        const b = fakeBrowser()
+        const rejected = {
+          contents: {
+            uploadFeedbackItemRenderer: {
+              contents: [
+                {
+                  uploadStatus: {
+                    uploadStatus: 'REJECTED',
+                    message: { runs: [{ text: 'Daily upload limit reached' }] },
+                    detailedMessage: { runs: [{ text: 'Verification needed to upload more daily.' }] },
+                    uploadStatusReason: 'UPLOAD_STATUS_REASON_RATE_LIMIT_EXCEEDED',
+                  },
+                },
+              ],
+            },
+          },
+        }
+        const r = await withYt(studioRoutes({ 'studio:upload/createvideo': () => rejected }), () => cli('youtube', 'item', 'publish', '--video', video, '--title', 't'))
+        expect(r.env.error).toMatchObject({
+          code: 'RISK_CONTROL',
+          message: 'YouTube 拒绝了这次上传：Daily upload limit reached：Verification needed to upload more daily.',
+          detail: { kind: 'rate_limit', reason: 'UPLOAD_STATUS_REASON_RATE_LIMIT_EXCEEDED' },
+        })
+        expect(b.state.closed).toBe(1)
+      })
+
+      it('publish：metadata_update 网络出错时重试一次；仍失败时报错并带上视频 ID（视频已经建好了）', async () => {
+        fakeBrowser()
+        let n = 0
+        const throwOnce = () => {
+          if (++n === 1) throw new RequestError('connection reset')
+          return { overallResult: { resultCode: 'UPDATE_SUCCESS' } }
+        }
+        const ok = await withYt(studioRoutes({ 'studio:video_manager/metadata_update': throwOnce }), () => cli('youtube', 'item', 'publish', '--video', video, '--title', 't', '--tag', 'a'))
+        expect(ok.env.ok).toBe(true)
+        expect(n).toBe(2)
+        const alwaysFail = () => {
+          throw new RequestError('connection reset')
+        }
+        const failed = await withYt(studioRoutes({ 'studio:video_manager/metadata_update': alwaysFail }), () => cli('youtube', 'item', 'publish', '--video', video, '--title', 't', '--tag', 'a'))
+        expect(failed.env.error).toMatchObject({ code: 'NETWORK', message: expect.stringContaining(`视频 ${VIDEO_ID} 已建好`) })
+      })
+
+      it('publish：建视频没有返回 videoId 时报 UPSTREAM，不重试（请求可能已经生效）', async () => {
+        const b = fakeBrowser()
+        await withYt(studioRoutes({ 'studio:upload/createvideo': () => ({ responseContext: {} }) }), async (calls) => {
+          const r = await cli('youtube', 'item', 'publish', '--video', video, '--title', 't')
+          expect(r.env.error.code).toBe('UPSTREAM')
+          expect(calls.filter((c) => c.path === 'studio:upload/createvideo')).toHaveLength(1)
+          expect(b.state.closed).toBe(1)
+        })
+      })
+
+      it('att/esr 要求 reauth 时，用 reauth 证明换会话令牌', async () => {
+        const b = fakeBrowser()
+        await withYt(
+          studioRoutes({
+            'studio:att/esr': () => ({ shouldFetchReauthSessionToken: true, ctx: 'IVCTX' }),
+            'studio:security/get_web_reauth_url': () => ({ encodedReauthProofToken: 'PROOF', sessionRiskCtx: 'RISK' }),
+            'studio:ars/grst': () => ({ sessionToken: 'TOKEN_REAUTH' }),
+          }),
+          async (calls) => {
+            const r = await cli('youtube', 'item', 'delete', VIDEO_ID, '-y')
+            expect(r.env.ok).toBe(true)
+            expect(calls.find((c) => c.path === 'studio:security/get_web_reauth_url')!.body).toMatchObject({ ivctx: 'IVCTX', botguardResponse: 'WEB1', flow: 'REAUTH_FLOW_YT_STUDIO_COLD_LOAD' })
+            expect(calls.find((c) => c.path === 'studio:ars/grst')!.body.ctx).toBe('RISK')
+            expect(calls.find((c) => c.path === 'studio:ars/grst')!.body.context.request.reauthRequestInfo).toEqual({ encodedReauthProofToken: 'PROOF' })
+            expect(calls.find((c) => c.path === 'studio:video/delete')!.body.context.request.sessionInfo).toEqual({ token: 'TOKEN_REAUTH' })
+            expect(b.attests).toHaveLength(1)
+          },
+        )
+      })
+
+      it('reauth 被拒绝时报 RISK_CONTROL', async () => {
+        const b = fakeBrowser()
+        const r = await withYt(
+          studioRoutes({
+            'studio:att/esr': () => ({ shouldFetchReauthSessionToken: true, ctx: 'IVCTX' }),
+            'studio:security/get_web_reauth_url': () => ({}),
+          }),
+          () => cli('youtube', 'item', 'delete', VIDEO_ID, '-y'),
+        )
+        expect(r.env.error).toMatchObject({ code: 'RISK_CONTROL', detail: { kind: 'blocked' } })
+        expect(b.state.closed).toBe(1)
+      })
+
+      it('delete：删除请求带会话令牌；未确认时拒绝且不打开浏览器', async () => {
+        const b = fakeBrowser()
+        await withYt(studioRoutes(), async (calls) => {
+          expect((await cli('youtube', 'item', 'delete', VIDEO_ID)).env.error.code).toBe('CONFIRM_REQUIRED')
+          expect(b.opened).toHaveLength(0)
+          const r = await cli('youtube', 'item', 'delete', VIDEO_ID, '-y')
+          expect(r.env.data).toEqual({ id: VIDEO_ID })
+          const del = calls.find((c) => c.path === 'studio:video/delete')!
+          expect(del.body).toMatchObject({ videoId: VIDEO_ID })
+          expect(del.body.context.request.sessionInfo).toEqual({ token: 'TOKEN1' })
+          expect(b.attests.map((a) => a.binding)).toEqual([{ atr_challenge: 'CH1' }])
+        })
+      })
+
+      it('delete：Studio 没有返回成功时报 UPSTREAM', async () => {
+        fakeBrowser()
+        const r = await withYt(studioRoutes({ 'studio:video/delete': () => ({}) }), () => cli('youtube', 'item', 'delete', VIDEO_ID, '-y'))
+        expect(r.env.error).toMatchObject({ code: 'UPSTREAM', message: `删除视频 ${VIDEO_ID} 没有成功` })
+      })
+
+      it('Studio 跳到 Google 登录页时报 AUTH_EXPIRED，并关闭浏览器', async () => {
+        const b = fakeBrowser({ url: 'https://accounts.google.com/ServiceLogin' })
+        const r = await withYt(studioRoutes(), () => cli('youtube', 'item', 'publish', '--video', video, '--title', 't'))
+        expect(r.env.error.code).toBe('AUTH_EXPIRED')
+        expect(b.attests).toHaveLength(0)
+        expect(b.state.closed).toBe(1)
+      })
+
+      it('找不到 Chromium：报 ERROR 并给出安装方式，不上传文件', async () => {
+        delete process.env.CATBUS_YOUTUBE_BROWSER
+        const savedHome = process.env.HOME
+        process.env.HOME = join(home.dir, 'no-home') // 没有 Playwright 缓存
+        try {
+          const r = await withYt({}, (calls) => cli('youtube', 'item', 'publish', '--video', video, '--title', 't').then((x) => ({ ...x, calls: calls.length })))
+          expect(r.env.error.code).toBe('ERROR')
+          expect(r.env.error.message).toMatch(/找不到 Chromium/)
+          expect(r.env.error.hint).toMatch(/playwright install chromium/)
+          expect(r.calls).toBe(0)
+        } finally {
+          process.env.HOME = savedHome
+        }
+      })
+
+      it('config 指定的浏览器不存在时报 ERROR，不回退到缓存', async () => {
+        process.env.CATBUS_YOUTUBE_BROWSER = join(home.dir, 'nope', 'chrome')
+        const r = await withYt({}, () => cli('youtube', 'item', 'delete', VIDEO_ID, '-y'))
+        expect(r.env.error).toMatchObject({ code: 'ERROR', message: `找不到配置的浏览器：${join(home.dir, 'nope', 'chrome')}` })
+      })
+    })
+
+    describe('Chromium 查找与 cookie 回写', () => {
+      const touch = (p: string) => {
+        mkdirSync(dirname(p), { recursive: true })
+        writeFileSync(p, '')
+      }
+      const ck = (name: string, value: string): BrowserCookie => ({ name, value, domain: '.youtube.com', path: '/', expires: null })
+
+      it('darwin：取 Playwright 缓存里最新的 chromium-<版本>，忽略 headless shell', () => {
+        const root = join(home.dir, 'Library', 'Caches', 'ms-playwright')
+        const bin = (dir: string) => join(root, dir, 'chrome-mac-arm64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing')
+        touch(bin('chromium-1200'))
+        touch(bin('chromium-1234'))
+        touch(join(root, 'chromium_headless_shell-1300', 'chrome-mac-arm64', 'chrome-headless-shell'))
+        expect(findChrome({ platform: 'darwin', home: home.dir, env: {} })).toBe(bin('chromium-1234'))
+      })
+
+      it('linux 与 win32 的目录布局；PLAYWRIGHT_BROWSERS_PATH 优先', () => {
+        const linux = join(home.dir, '.cache', 'ms-playwright', 'chromium-1234', 'chrome-linux64', 'chrome')
+        touch(linux)
+        expect(findChrome({ platform: 'linux', home: home.dir, env: {} })).toBe(linux)
+        const local = join(home.dir, 'AppData', 'Local')
+        const win = join(local, 'ms-playwright', 'chromium-1234', 'chrome-win64', 'chrome.exe')
+        touch(win)
+        expect(findChrome({ platform: 'win32', home: home.dir, env: { LOCALAPPDATA: local } })).toBe(win)
+        const custom = join(home.dir, 'custom', 'chromium-9', 'chrome-linux', 'chrome')
+        touch(custom)
+        expect(findChrome({ platform: 'linux', home: home.dir, env: { PLAYWRIGHT_BROWSERS_PATH: join(home.dir, 'custom') } })).toBe(custom)
+      })
+
+      it('优先级：config > 环境变量 > 缓存；指定的文件不存在时报 ERROR', () => {
+        const cache = join(home.dir, '.cache', 'ms-playwright', 'chromium-1234', 'chrome-linux64', 'chrome')
+        const envExe = join(home.dir, 'env-chrome')
+        const cfgExe = join(home.dir, 'cfg-chrome')
+        touch(cache)
+        touch(envExe)
+        touch(cfgExe)
+        expect(findChrome({ platform: 'linux', home: home.dir, env: {} })).toBe(cache)
+        expect(findChrome({ platform: 'linux', home: home.dir, env: { CATBUS_YOUTUBE_BROWSER: envExe } })).toBe(envExe)
+        expect(findChrome({ platform: 'linux', home: home.dir, env: { CATBUS_YOUTUBE_BROWSER: envExe }, configured: cfgExe })).toBe(cfgExe)
+        expect(() => findChrome({ platform: 'linux', home: home.dir, env: {}, configured: join(home.dir, 'nope') })).toThrow(/找不到配置的浏览器/)
+      })
+
+      it('什么都找不到时报 ERROR，并给出安装命令与配置方式', () => {
+        expect(() => findChrome({ platform: 'linux', home: join(home.dir, 'empty'), env: {} })).toThrow(/找不到 Chromium/)
+      })
+
+      it('syncCookies：只写回浏览器改过的值，Node 侧已经更新的值不被覆盖', () => {
+        const jar = new CookieJar([ck('__Secure-1PSIDTS', 'old'), ck('SAPISID', 'node-new'), ck('LOGIN_INFO', 'same')])
+        const injected = new Map([
+          [cookieKey(ck('__Secure-1PSIDTS', '')), 'old'],
+          [cookieKey(ck('SAPISID', '')), 'old'],
+          [cookieKey(ck('LOGIN_INFO', '')), 'same'],
+        ])
+        const fresh = [ck('__Secure-1PSIDTS', 'browser-new'), ck('SAPISID', 'old'), ck('LOGIN_INFO', 'same')]
+        expect(syncCookies(jar, injected, fresh)).toBe(1)
+        expect(jar.get('__Secure-1PSIDTS')).toBe('browser-new')
+        expect(jar.get('SAPISID')).toBe('node-new')
+        expect(jar.get('LOGIN_INFO')).toBe('same')
+      })
     })
 
     it('live send：取登录后聊天输入框里的 params 发消息；被限制时报出 YouTube 的说明', async () => {

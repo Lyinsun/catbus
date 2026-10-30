@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { filter } from '../../core/options.js'
+import { filter, visibility } from '../../core/options.js'
 import { definePlatform, handlers } from '../../core/registry.js'
 import { VOCAB } from '../../core/vocab.js'
 
@@ -46,8 +46,12 @@ export default definePlatform({
         'item unlike': impl('full', 'itemUnlike', { note: '取消点赞（也会取消点踩）' }),
         'item collect': impl('full', 'itemCollect', { note: '加入稍后观看' }),
         'item uncollect': impl('full', 'itemUncollect', { note: '移出稍后观看' }),
-        'item publish': { upstream: 'none', note: 'YouTube Studio 建视频要求网页端 BotGuard 的校验结果，catbus 还生成不了' },
-        'item delete': { upstream: 'none', note: '同 item publish，Studio 删除也要求 BotGuard 校验' },
+        'item publish': impl('full', 'itemPublish', {
+          supports: ['title', 'text', 'video', 'cover', 'tag', 'visibility', 'schedule'],
+          options: { visibility: visibility('public', 'private') },
+          note: '走 YouTube Studio：分段上传，建视频要求 BotGuard 校验，需要本地 Chromium（见 AGENTS 5.7）。账号要先开频道；--schedule 先建成私享，到点转公开',
+        }),
+        'item delete': impl('full', 'itemDelete', { note: '只能删自己的视频；同样需要本地 Chromium（BotGuard 校验）' }),
 
         'comment list': impl('full', 'commentList'),
         'comment replies': impl('full', 'commentReplies', { note: '<comment> 为根评论 ID；YouTube 的回复只有一层' }),

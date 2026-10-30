@@ -57,6 +57,10 @@ describe('全局命令', () => {
     expect((await cli('config', 'get', 'proxy')).env.data).toBeNull()
     expect((await cli('config', 'list')).env.data).toEqual({ timeout: 12, 'xhs.proxy': 'socks5://127.0.0.1:1080' })
     expect((await cli('config', 'unset', 'xhs.proxy')).env.data).toEqual({ key: 'xhs.proxy', value: null })
+    // youtube.browser：本地 Chromium 的绝对路径（AGENTS 5.7），平台别名 yt 也接受
+    expect((await cli('config', 'set', 'yt.browser', process.execPath)).env.data).toEqual({ key: 'youtube.browser', value: process.execPath })
+    expect((await cli('config', 'get', 'youtube.browser')).env.data).toBe(process.execPath)
+    expect((await cli('config', 'unset', 'youtube.browser')).env.data).toEqual({ key: 'youtube.browser', value: null })
     expect((await cli('config', 'list')).env.data).toEqual({ timeout: 12 })
   })
 
@@ -64,6 +68,9 @@ describe('全局命令', () => {
     expect((await cli('config', 'set', 'proxy', 'ftp://x')).env.error.code).toBe('USAGE')
     expect((await cli('config', 'set', 'timeout', '0')).env.error.code).toBe('USAGE')
     expect((await cli('config', 'set', 'nope.proxy', 'http://x')).env.error.code).toBe('USAGE')
+    expect((await cli('config', 'set', 'youtube.browser', 'relative/chrome')).env.error.code).toBe('USAGE')
+    expect((await cli('config', 'set', 'youtube.browser', join(home.dir, 'missing'))).env.error.code).toBe('USAGE')
+    expect((await cli('config', 'set', 'xhs.browser', process.execPath)).env.error.code).toBe('USAGE')
     expect((await cli('config', 'get', 'foo')).code).toBe(2)
     expect(existsSync(join(home.dir, 'config.toml'))).toBe(false)
   })
