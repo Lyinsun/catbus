@@ -261,9 +261,10 @@ export async function itemPublish(ctx: Ctx) {
   const media = await localVideo(c, o.video)
 
   // 先拿会话令牌，再上传：浏览器启动失败或 reauth 被拒时，不会白传一遍视频
+  // 本地文件的句柄在命令结束时关闭（浏览器启动失败、令牌被拒等提前返回的情况也要关，Node 26 起 GC 回收未关闭的句柄会报错）
   const id = await withBrowser(c, cfg, executable, async (a) => {
     const token = await a.sessionToken()
-    const uploaded = await uploadVideo(c, media).finally(() => media.close?.())
+    const uploaded = await uploadVideo(c, media)
     const att = await a.uploadAttestation(uploaded.scottyResourceId)
     const created = await studio<any>(
       c,
@@ -298,7 +299,7 @@ export async function itemPublish(ctx: Ctx) {
       await setMetadata(c, cfg, token, videoIdNew, update)
     }
     return videoIdNew
-  })
+  }).finally(() => media.close?.())
 
   return n.item({
     id,
