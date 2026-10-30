@@ -26,6 +26,8 @@
   - 只支持 macOS，需要先安装 `dreamina`
 - core：端声明新增 `use` 钩子，`auth use` 设置当前账号前调用（AGENTS 5.3、5.6）
 - 新增 `docs/platforms/jimeng.md`、AGENTS.md 5.6，更新能力矩阵、登录指南、Agent 技能和 llms.txt
+- `user update`：修改当前账号的昵称（`--name`）、头像（`--avatar`）、简介（`--bio`），只改给出的字段，返回修改后的 User
+- bilibili：`user update`，接口按网页端个人中心 `account.bilibili.com` 补（`x/member/web/sign/update`、`face/update`、`web/update`），上游没有，没有对拍。改昵称前先查 `uname/update/message` 的资格；改昵称扣硬币，带 `--name` 时需要确认
 
 ### Fixed
 

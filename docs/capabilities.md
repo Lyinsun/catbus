@@ -50,6 +50,7 @@
 | user following | ◐ | ✓ | ✓ | ○ | ✓ | ○ | — | — | — | ○ | ✓ | — | — |
 | user follow | ○ | ○ | ✓ | ○ | ○ | ○ | ○ | — | — | ✓ | ✓ | — | — |
 | user unfollow | ○ | ○ | ✓ | ○ | ○ | ○ | ○ | — | — | ✓ | ✓ | — | — |
+| user update | — | — | — | ◐ | — | — | — | — | — | — | — | — | — |
 
 - tiktok `user get`：me 部分支持
 - xianyu `user get`：只支持 me；查询他人规划中
@@ -66,6 +67,7 @@
 - youtube `user following`：只能看自己的（me）订阅
 - youtube `user follow`：订阅频道
 - youtube `user unfollow`：取消订阅
+- bilibili `user update`：非上游：上游没有改资料的接口，请求按网页端个人中心 account.bilibili.com 补的，没有对拍。改昵称每次扣 6 个硬币（从没设过昵称的账号免费一次），需要确认；签名最多 70 字，改完要审核；头像只收 png / jpg，不超过 2MB
 - `user search --fans`：douyin
 - `user search --user-type`：douyin
 - `user items --sort` 取值：bilibili latest / views / collects
