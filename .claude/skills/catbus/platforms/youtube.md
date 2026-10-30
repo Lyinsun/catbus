@@ -11,11 +11,11 @@
 - **读（不用登录）**：`item search` / `get` / `related` / `media` / `download`；`comment list` / `replies`；`user get` / `search` / `items`；`series list` / `items`（播放列表）；`keyword suggest`；`live get` / `search` / `history` / `listen`（直播聊天）。
 - **读（要登录）**：`feed list`（首页推荐、订阅流）；`history list`；`notice list` / `count`；`user likes` / `collects`（稍后观看）/ `following`，这三个只能看自己的。
 - **写（要登录）**：`item like` / `unlike` / `collect` / `uncollect`（稍后观看）；`user follow` / `unfollow`（订阅频道）；`comment add` / `delete` / `like` / `unlike`；`live send`（只发文字）；`channel create`（给账号开频道，上传、评论、直播聊天都要求有频道）。
-- **自己的视频（要登录，账号要开频道）**：`item list`（数据来自 YouTube Studio）。
+- **自己的视频（要登录，账号要开频道）**：`item list`（数据来自 YouTube Studio）；`item publish`（发布，`--visibility public|private`，`--tag` 可重复，`--cover`，`--schedule` 定时发布）；`item delete`（需要 `-y`）。`item publish` / `delete` 需要本机 Chromium（见「坑」）。
 
 ## 做不到
 
-`item publish` / `item delete`（规划中：YouTube Studio 要求网页端 BotGuard 校验，catbus 还生成不了；需要时让用户去 studio.youtube.com 操作）、`user update`、私信（YouTube 没有私信）、`keyword hot` 和热门流（趋势页已下线）、别人的点赞 / 订阅列表。
+`user update`、私信（YouTube 没有私信）、`keyword hot` 和热门流（趋势页已下线）、别人的点赞 / 订阅列表。
 
 ## 参数
 
@@ -30,6 +30,10 @@
 
 ## 坑
 
+- **发布与删除需要本机 Chromium**：Studio 要求网页端的 BotGuard 校验，由无头 Chromium 计算。找不到时报 `ERROR` 并给出安装方式：`npx playwright install chromium`，或 `catbus config set youtube.browser <绝对路径>`。不要用系统里的 Google Chrome。测试一律用 `--visibility private`，测完用 `item delete -y` 删掉。
+- `item publish` 的 `--schedule` 要是将来的时间；过去的时间报 `USAGE`。
+- `--cover` 实测未通过（封面字段失败，账号未验证时推测不能传自定义封面，未经证实）；要用封面时先在 studio.youtube.com 上确认账号能设置自定义封面。
+- 未验证账号每天的上传数有限，超了会报 `RISK_CONTROL`（`detail.kind` 为 `rate_limit`）。测试别连续发。
 - 国内网络需要代理（`catbus config set youtube.proxy <url>`），没配时请求超时报 `NETWORK`。
 - 媒体地址走不带登录的 VISIONOS 客户端：同一出口 IP 请求多了会报 `RISK_CONTROL`（YouTube 要人机验证），过一段时间再试，不要连续重试。年龄限制、会员专享视频拿不到。下载得到视频轨、音频轨两个文件。
 - 没有开频道的 Google 账号：`user get me` 报错，不能发评论；点赞、订阅、稍后观看可以用。

@@ -10,7 +10,7 @@
 - 一个命令 `catbus`，按统一的命令规范调用 10 个平台：小红书、抖音、TikTok、B 站、快手、微博、闲鱼、淘宝、京东、X。另有直接对接官方接口的 12306 和 YouTube（见第 3 节）。
 - 能力来源是作者 [cv-cat](https://github.com/cv-cat) 的 10 个开源仓库，已克隆到 `references/`，作为**只读的原始来源**。
 - 所有平台都在本仓库里**用 TypeScript 重写**，不在运行时调用上游的 Python。
-- **用户只需要安装 Node**（版本见 7.1）。不需要 Python，不需要 C/C++ 编译器，也不需要其他系统依赖。
+- **用户只需要安装 Node**（版本见 7.1）。不需要 Python，不需要 C/C++ 编译器，也不需要其他系统依赖。例外：`youtube` 的 `item publish` / `item delete` 需要本机的 Chromium（见 5.7）。
   - `npm i -g catbus-cli` 装完就能离线使用。
   - 必须支持全部目标系统（见 7.2）。
 - 以 **npm 包**分发，不发 PyPI。安装体积不是约束，优先保证开箱即用。
@@ -38,7 +38,7 @@
 ## 2. 范围
 
 - 目前支持第 3 节的 13 个平台的 web 端（10 个内容与电商平台 + 12306 铁路平台 `12306` + YouTube `youtube` + 即梦 `jimeng`）；app / pc 端在注册表里为 planned（见 4.3）。
-- `jimeng` 不调用平台接口，只保存和切换即梦官方 CLI `dreamina` 的登录态，是第 1 节「只需要 Node」「支持全部目标系统」的例外：需要另外安装 `dreamina`，只支持 macOS（见 5.6）。
+- `jimeng` 不调用平台接口，只保存和切换即梦官方 CLI `dreamina` 的登录态，是第 1 节「只需要 Node」「支持全部目标系统」的例外：需要另外安装 `dreamina`，只支持 macOS（见 5.6）。`youtube` 的 `item publish` / `item delete` 同样是「只需要 Node」的例外，需要本机的 Chromium（见 5.7）。
 - 矩阵里的 ○（平台有这个概念、上游没有的能力）只占位：注册为 planned，执行时返回 NOT_IMPLEMENTED，有需要时再实现。移植中发现矩阵与上游不符（上游其实没有、或只是占位）的能力，按上游实际情况标为 ○ 或 ◐，以 `docs/capabilities.md` 为准。
 - 新平台开始移植时，先把平台 id、别名、`item` 叫法等登记到第 3 节、4.2 和 4.5，再进注册表；在那之前 `catbus <平台>` 是未知平台（`USAGE`）。
 - 改规范先改本文件，再写代码。
@@ -560,11 +560,15 @@ timeout = 30                      # 单次请求超时（秒）
 
 [xhs]
 proxy = "socks5://..."            # 平台代理
+
+[youtube]
+browser = "/path/to/chromium"     # 发布与删除用的本地 Chromium（见 5.7）
 ```
 
 - 代理的优先级：`--proxy` > `<platform>.proxy` > `proxy`。
 - 不读取 `HTTP(S)_PROXY` 环境变量，代理只能显式配置。
 - `catbus config set xhs.proxy <url>`，用点号表示平台段。
+- `youtube.browser` 只接受已存在的绝对路径（`checkBrowser`），不接受代理地址。
 
 ### 5.6 代管外部 CLI 的登录态
 
@@ -579,6 +583,21 @@ proxy = "socks5://..."            # 平台代理
 - **登出**：`auth logout` 的服务端登出钩子只在外部存储里正是这个账号时调用外部 CLI 的登出（`dreamina logout`），再由 core 删除本地凭证。
 - **依赖与系统**：外部 CLI 由用户自己安装，找不到时报 `ERROR` 并提示安装。外部存储的读写按系统适配，未适配的系统报 `UNSUPPORTED`（`jimeng` 目前只支持 macOS）。
 - **限制**：同一时间只有一个账号生效，不能两个账号同时运行外部 CLI；不要绕过 catbus 用外部 CLI 自己的登录命令换账号，否则新登录的账号没有保存，下次切换时会被覆盖。
+
+### 5.7 YouTube Studio 写操作与本地 Chromium
+
+`youtube` 的 `item publish` 与 `item delete` 走 YouTube Studio（studio.youtube.com）。Studio 的写请求要在 `context.request` 里带两样 Google 的网页环境校验结果，catbus 在 Node 里生不成，所以这两个命令是「只需要 Node」的例外（见第 1 节）。
+
+- **分工**：无头 Chromium 只负责在 Studio 页面里计算 BotGuard（`src/platforms/youtube/web/botguard.ts` 的 `runBotGuard`，经 CDP 的 `Runtime.evaluate` 注入）。其余请求全部由 Node 发出：`att/get`、`att/esr`、reauth、`ars/grst`、上传（`upload.youtube.com`）、`upload/createvideo`、`video_manager/metadata_update`、`video/delete`。浏览器只用来算校验，不用来点页面。
+- **会话**：每个写命令内，`att/get`（CREATOR_STUDIO_ACTION）→ BotGuard → `att/esr` 换 `sessionToken`；esr 要求 reauth 时再走 `security/get_web_reauth_url` 与 `ars/grst`。写请求带 `sessionInfo.token`。建视频时，上传完成后再对 UNBOUND 挑战加上 `scottyResourceId` 算一次 BotGuard，放进 `attestationResponseData`。
+- **找浏览器**，按顺序：`catbus config set youtube.browser <路径>` → 环境变量 `CATBUS_YOUTUBE_BROWSER` → Playwright 缓存里最新的 `chromium-<版本>`（`npx playwright install chromium` 装的；macOS 在 `~/Library/Caches/ms-playwright`，Linux 在 `~/.cache/ms-playwright`，Windows 在 `%LOCALAPPDATA%\ms-playwright`，`PLAYWRIGHT_BROWSERS_PATH` 优先）。找不到时报 `ERROR`。
+  - 不扫描系统里的 Google Chrome：那是用户日常在用的浏览器，catbus 不占用它。
+  - 不用 `chromium_headless_shell`：它过不了 Studio 的浏览器检查。
+  - 每次命令启动一个独立的临时 profile（用完删除），UA 与 Node 侧请求一致，不带 `HeadlessChrome`。经 `--proxy` / `<platform>.proxy` / `proxy` 解析出的代理同样传给浏览器。
+- **cookie**：打开页面前把凭证里的 cookie 注入浏览器；命令结束时，只把浏览器里被 Google 轮换过的值（与注入时不同的）写回凭证。Node 侧已经通过 Set-Cookie 更新的值不会被旧值覆盖。
+- **重试**：会话相关的请求（att/get、att/esr、reauth、ars/grst）和 interpreter 下载，网络出错时再试一次；页面导航也重试（只读）。上传、建视频、删除不重试，建视频没有返回视频 ID 时报 `UPSTREAM`。`metadata_update` 是幂等的，网络出错时再试一次；视频已建好后的任何元数据失败，错误信息都带上视频 ID。
+- **错误**：找不到浏览器 → `ERROR`；浏览器打开页面后跳到 Google 登录页 → `AUTH_EXPIRED`；reauth 被拒绝或没有发放令牌 → `RISK_CONTROL`（`detail.kind` 为 `blocked`）；BotGuard 在页面里报错 → `UPSTREAM`。
+- **测试**：离线测试替换 `browser.open`（假浏览器只记录 BotGuard 的 binding）和 Studio 的响应；`findChrome` 的路径按 darwin / linux / win32 的目录布局做单测。真机验证只在测试账号上做，视频一律私享，测完用 `item delete` 删掉。
 
 ## 6. 输出
 
