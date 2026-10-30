@@ -8,7 +8,7 @@
 | 上游仓库 | 无（直接对接 YouTube 网页背后的 InnerTube 接口 `/youtubei/v1/`） |
 | 接口来源 | 记录在 [`src/platforms/youtube/UPSTREAM`](../../src/platforms/youtube/UPSTREAM) |
 | 端 | web ✓ · app ○ 规划中 · pc ○ 规划中 |
-| 命令（web） | 已实现 44 条（✓ 40 · ◐ 4），规划中 ○ 0 条 |
+| 命令（web） | 已实现 44 条（✓ 41 · ◐ 3），规划中 ○ 0 条 |
 
 命令表与 `catbus platforms youtube` 一致；选项以 `catbus youtube <resource> <action> --help` 为准。通用的命令语法、输出结构见 [AGENTS.md 第 4 节](../../AGENTS.md#4-命令规范)。
 
@@ -91,8 +91,8 @@ catbus config set youtube.proxy http://127.0.0.1:7890
 | `item collect` | ✓ | 加入「稍后观看」。需要登录。 |
 | `item uncollect` | ✓ | 移出「稍后观看」。需要登录。 |
 | `item list` | ✓ | 自己频道上传的视频（含私享、草稿），按发布时间倒序，数据来自 YouTube Studio。需要登录。 |
-| `item publish` | ◐ | 发布视频：`--video`、`--title` 必填；`--text` 为简介；`--tag`（可重复）、`--cover`（图片）、`--visibility public / private`（默认 public）、`--schedule`（ISO 时间，先建成私享，到点转公开）。走 YouTube Studio，建视频要 BotGuard 校验，需要本机的 Chromium（见「已知限制」）。账号要先开频道。 |
-| `item delete` | ◐ | 删除自己的视频（需要确认，`-y`）。同样需要本机的 Chromium。 |
+| `item publish` | ◐ | 发布视频：`--video`、`--title` 必填；`--text` 为简介；`--tag`（可重复）、`--cover`（图片）、`--visibility public / private`（默认 public）、`--schedule`（ISO 时间，先建成私享，到点转公开）。走 YouTube Studio，建视频要 BotGuard 校验，需要本机的 Chromium（见「已知限制」）。账号要先开频道。**自定义封面（`--cover`）未验证**，可能需要已验证的账号。 |
+| `item delete` | ✓ | 删除自己的视频（需要确认，`-y`）。走 YouTube Studio，同样需要本机的 Chromium（见「已知限制」）。2026-10-30 实测通过。 |
 
 ### comment
 
@@ -185,6 +185,6 @@ catbus youtube comment add dQw4w9WgXcQ "Nice video"
 - **没有私信**：YouTube 2019 年已下线私信，`msg` 命令都不支持。
 - **没有热门**：YouTube 已下线「趋势」页，`feed list --kind hot`、`keyword hot` 都不支持。
 - **发布与删除需要本机的 Chromium**：Studio 要求网页端的 BotGuard 校验，catbus 在无头 Chromium 的 Studio 页面里算这个结果，其余请求都由 Node 发出。找浏览器的顺序：`catbus config set youtube.browser <路径>` → 环境变量 `CATBUS_YOUTUBE_BROWSER` → Playwright 缓存里最新的 Chromium。没有时先装：`npx playwright install chromium`。不使用系统里的 Google Chrome，也不使用 headless shell。每次命令用临时 profile，用完删除。详见 AGENTS.md 5.7。
-- **封面（`--cover`）未能真机通过**：2026-10-30 用测试账号实测，16:9 的 PNG 与 JPEG 封面都报 `videoStill` 失败（错误里会列出「封面」）。当天该账号的上传配额也已用完，之后无法复测。推测是未完成手机验证的账号不能上传自定义封面，未经证实。标签、定时发布、正文均已通过实测。
-- **发布会产生真实内容**：`item publish` 发出去的视频在频道里可见（取决于 `--visibility`）；测试一律用 `--visibility private`，删除需要 `-y`。
+- **自定义封面未验证**：`--cover` 在 2026-10-30 的真机测试里失败（16:9 的 PNG 与 JPEG 都报 `videoStill` 失败，错误里会列出「封面」）。当天测试账号的上传配额已用完，之后没有复测。自定义封面可能需要已验证的账号，这一点没有证实。标签、定时发布、正文已在真机通过。
+- **发布会产生真实内容**：`item publish` 发出去的视频在频道里可见（取决于 `--visibility`）；测试一律用 `--visibility private`。`item delete` 会永久删除视频，需要确认（`-y`）。2026-10-30 实测：发布、删除均通过。
 - 修改频道资料（`user update`）还不支持。

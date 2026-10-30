@@ -589,15 +589,22 @@ browser = "/path/to/chromium"     # 发布与删除用的本地 Chromium（见 5
 `youtube` 的 `item publish` 与 `item delete` 走 YouTube Studio（studio.youtube.com）。Studio 的写请求要在 `context.request` 里带两样 Google 的网页环境校验结果，catbus 在 Node 里生不成，所以这两个命令是「只需要 Node」的例外（见第 1 节）。
 
 - **分工**：无头 Chromium 只负责在 Studio 页面里计算 BotGuard（`src/platforms/youtube/web/botguard.ts` 的 `runBotGuard`，经 CDP 的 `Runtime.evaluate` 注入）。其余请求全部由 Node 发出：`att/get`、`att/esr`、reauth、`ars/grst`、上传（`upload.youtube.com`）、`upload/createvideo`、`video_manager/metadata_update`、`video/delete`。浏览器只用来算校验，不用来点页面。
-- **会话**：每个写命令内，`att/get`（CREATOR_STUDIO_ACTION）→ BotGuard → `att/esr` 换 `sessionToken`；esr 要求 reauth 时再走 `security/get_web_reauth_url` 与 `ars/grst`。写请求带 `sessionInfo.token`。建视频时，上传完成后再对 UNBOUND 挑战加上 `scottyResourceId` 算一次 BotGuard，放进 `attestationResponseData`。
-- **找浏览器**，按顺序：`catbus config set youtube.browser <路径>` → 环境变量 `CATBUS_YOUTUBE_BROWSER` → Playwright 缓存里最新的 `chromium-<版本>`（`npx playwright install chromium` 装的；macOS 在 `~/Library/Caches/ms-playwright`，Linux 在 `~/.cache/ms-playwright`，Windows 在 `%LOCALAPPDATA%\ms-playwright`，`PLAYWRIGHT_BROWSERS_PATH` 优先）。找不到时报 `ERROR`。
+- **CDP 传输**：用 `--remote-debugging-pipe`，协议消息走 fd 3 / fd 4，以 `\0` 分隔，不开调试端口。调试端口会让同机其他进程拿到会话 cookie，所以不用。因为 CDP 不走 WebSocket，这里不涉及第 7.3 节的 WebSocket 选型。
+- **顺序**：每个写命令内，先开浏览器，再 `att/get`（CREATOR_STUDIO_ACTION）→ BotGuard → `att/esr` 换 `sessionToken`（esr 要求 reauth 时再走 `security/get_web_reauth_url` 与 `ars/grst`），拿到令牌之后才开始上传。这样浏览器启动失败或 reauth 被拒绝时，不会白传一遍视频。上传期间浏览器保持打开，上传完成后用它对 UNBOUND 挑战加上 `scottyResourceId` 算一次 BotGuard，放进 `attestationResponseData`。写请求带 `sessionInfo.token`。
+- **interpreter 白名单**：BotGuard 的 interpreter 地址来自 `att/get` 的响应，取回后要在已登录的 Studio 页面里执行，所以只允许 `https` 协议、主机在白名单里（目前只有 `www.google.com`，即实测出现过的 `//www.google.com/js/th/…`）。取回时不跟随重定向，跳转目标不在白名单里直接拒绝；最终地址也要再校验一次。新的 Google 静态域要先确认是真实出现过，再加进白名单。
+- **找浏览器**，按顺序：`catbus config set youtube.browser <绝对路径>` → 环境变量 `CATBUS_YOUTUBE_BROWSER`（同样要求绝对路径）→ Playwright 缓存里最新的 `chromium-<版本>`（`npx playwright install chromium` 装的；macOS 在 `~/Library/Caches/ms-playwright`，Linux 在 `~/.cache/ms-playwright`，Windows 在 `%LOCALAPPDATA%\ms-playwright`，`PLAYWRIGHT_BROWSERS_PATH` 优先）。指定的路径必须是可以执行的文件（`X_OK`），否则报 `ERROR`；都没有时也报 `ERROR`。
   - 不扫描系统里的 Google Chrome：那是用户日常在用的浏览器，catbus 不占用它。
   - 不用 `chromium_headless_shell`：它过不了 Studio 的浏览器检查。
-  - 每次命令启动一个独立的临时 profile（用完删除），UA 与 Node 侧请求一致，不带 `HeadlessChrome`。经 `--proxy` / `<platform>.proxy` / `proxy` 解析出的代理同样传给浏览器。
-- **cookie**：打开页面前把凭证里的 cookie 注入浏览器；命令结束时，只把浏览器里被 Google 轮换过的值（与注入时不同的）写回凭证。Node 侧已经通过 Set-Cookie 更新的值不会被旧值覆盖。
-- **重试**：会话相关的请求（att/get、att/esr、reauth、ars/grst）和 interpreter 下载，网络出错时再试一次；页面导航也重试（只读）。上传、建视频、删除不重试，建视频没有返回视频 ID 时报 `UPSTREAM`。`metadata_update` 是幂等的，网络出错时再试一次；视频已建好后的任何元数据失败，错误信息都带上视频 ID。
-- **错误**：找不到浏览器 → `ERROR`；浏览器打开页面后跳到 Google 登录页 → `AUTH_EXPIRED`；reauth 被拒绝或没有发放令牌 → `RISK_CONTROL`（`detail.kind` 为 `blocked`）；BotGuard 在页面里报错 → `UPSTREAM`。
-- **测试**：离线测试替换 `browser.open`（假浏览器只记录 BotGuard 的 binding）和 Studio 的响应；`findChrome` 的路径按 darwin / linux / win32 的目录布局做单测。真机验证只在测试账号上做，视频一律私享，测完用 `item delete` 删掉。
+- **浏览器启动参数**：每次命令用独立的临时 profile，用完删除（删除失败时打 warn 并给出路径）；UA 与 Node 侧请求一致，不带 `HeadlessChrome`。
+  - **代理**：与 Node 侧使用同一个代理（`--proxy` / `<platform>.proxy` / `proxy`）。没有配置代理时传 `--proxy-server=direct://`，不读取系统代理。浏览器的子进程环境里去掉 `*_PROXY` 变量，与第 5.5 节「不读取 `HTTP(S)_PROXY`」一致。Chromium 的 `--proxy-server` 放不下认证信息，代理带账号密码时报 `USAGE`。
+  - **进程**：非 Windows 上放进独立的进程组，结束时整组发信号（先 SIGTERM，超时 SIGKILL），等进程组结束后才删除临时 profile。
+- **cookie**：打开页面前把凭证里的全部 cookie 注入浏览器（设置失败的个数会 warn）；命令结束时，把浏览器里的 cookie 按「名字 + 域 + 路径」写回凭证，覆盖注入时的全部域。写回的条件：浏览器的值与注入时不同（浏览器确实轮换过），并且 Node 侧这一份在这期间没有被改过。两边都改过同一个 cookie 时，取 `expires` 较新的那个；相同时保留 Node 侧的值（它是最后经过 Set-Cookie 确认的）。
+- **重试**：会话相关的请求（att/get、att/esr、reauth、ars/grst）和 interpreter 下载，网络出错时再试一次；页面导航也重试（只读）。上传分段在网络出错或状态码可重试（429、5xx）时，用同一个 offset 重发同一段，最多三次。`metadata_update` 是幂等的，网络出错时再试一次。
+- **不重试的写请求**：`upload/createvideo` 与 `video/delete` 遇到网络错误时，请求可能已经生效，报 `UPSTREAM`，hint 写「可能已经生效，先到 Studio 或用 `item list` 确认，不要直接重试」。建视频没有返回视频 ID 时，如果是上传被拒（`uploadFeedbackItemRenderer` 里 `REJECTED`），按原因报错（限流报 `RISK_CONTROL`）；否则报 `UPSTREAM`。
+- **视频建好之后**：任何失败（包括 `metadata_update` 的网络错误、AUTH 类错误）一律报 `UPSTREAM` 并附上视频 ID，hint 写「不要重新发布，视频已存在」。不透传 `NETWORK` 或 `AUTH_EXPIRED`，否则调用方会以为能重试整条发布，结果产生重复视频。
+- **大文件**：本地视频按段从磁盘读取，不整个读进内存；URL 形式的 `--video` 先下载到内存（只有这种情况）。
+- **错误**：找不到或无法执行浏览器 → `ERROR`；浏览器启动后立即退出或超时 → `ERROR`；浏览器打开页面后跳到 Google 登录页 → `AUTH_EXPIRED`；reauth 被拒绝或没有发放令牌 → `RISK_CONTROL`（`detail.kind` 为 `blocked`）；BotGuard 在页面里报错 → `UPSTREAM`；interpreter 不在白名单、或跳转 → `UPSTREAM`。
+- **测试**：离线测试替换 `browser.open`（假浏览器只记录 BotGuard 的 binding）和 Studio 的响应；`findChrome` 的路径按 darwin / linux / win32 的目录布局做单测；`runBotGuard` 在 `node:vm` 里独立运行；`openBrowser` 的失败路径（不可执行、启动后立即退出、超时）用假的可执行脚本测，并检查临时目录被清理。真机验证只在测试账号上做，视频一律私享，测完用 `item delete` 删掉。
 
 ## 6. 输出
 

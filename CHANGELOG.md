@@ -14,7 +14,7 @@
   - 登录只支持导入浏览器 cookie；支持多账号（`-a`、`auth use`）。没有开 YouTube 频道的 Google 账号以 Google 账号 ID 作为用户 ID
   - `item media` / `download` 走 VISIONOS 客户端、不带登录，给出最清晰的视频轨和音频轨两个文件；同一出口 IP 请求过多时 YouTube 会要求人机验证（`RISK_CONTROL`）
   - `item list`（自己上传的视频，数据来自 YouTube Studio）；`live send`：发直播聊天文字消息；`channel create`：给账号开频道
-  - `item publish`：发布视频（标题、简介、标签、封面、`--visibility public|private`、`--schedule` 定时发布）；`item delete`：删除自己的视频（需要确认）。两者走 YouTube Studio：建视频和删除要求网页端 BotGuard 校验，由本机的无头 Chromium 计算，其余请求都由 Node 发出。Chromium 按 `catbus config set youtube.browser <路径>`、环境变量 `CATBUS_YOUTUBE_BROWSER`、Playwright 缓存的顺序查找，不使用系统里的 Google Chrome（AGENTS.md 5.7）
+  - `item publish`（◐ 部分支持）：发布视频（标题、简介、标签、`--visibility public|private`、`--schedule` 定时发布）。自定义封面（`--cover`）未经真机验证，可能需要已验证的账号；`item delete`：删除自己的视频（需要确认，2026-10-30 实测通过）。两者走 YouTube Studio：建视频和删除要求网页端 BotGuard 校验，由本机的无头 Chromium 计算，其余请求都由 Node 发出。Chromium 按 `catbus config set youtube.browser <路径>`、环境变量 `CATBUS_YOUTUBE_BROWSER`、Playwright 缓存的顺序查找，不使用系统里的 Google Chrome（AGENTS.md 5.7）
   - core：配置项新增 `youtube.browser`（AGENTS.md 5.5）
 - 平台规范：YouTube 的 web 端声明 `guest: true`（AGENTS.md 5.2 的特例），读取命令不登录可用
 - 新增 `docs/platforms/youtube.md`，更新 Agent 技能、多语言 README 与 llms.txt
