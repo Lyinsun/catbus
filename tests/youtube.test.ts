@@ -55,7 +55,7 @@ function mockYt(routes: Record<string, Route>) {
   const calls: Call[] = []
   const restore = mockSender((p) => {
     const u = new URL(p.url)
-    const path = u.hostname.startsWith('suggestqueries') ? 'suggest' : u.pathname.replace(/^\/youtubei\/v1\//, '')
+    const path = (u.hostname.startsWith('studio.') ? 'studio:' : '') + (u.hostname.startsWith('suggestqueries') ? 'suggest' : u.pathname.replace(/^\/youtubei\/v1\//, ''))
     const body = typeof p.body === 'string' && p.body ? JSON.parse(p.body) : null
     calls.push({ path, body, headers: p.headers, cookies: p.cookies })
     const route = path === '/' ? () => fakeResponse(HOME, { headers: [['content-type', 'text/html']] }) : routes[path]
@@ -717,6 +717,25 @@ describe('youtube 平台（web）', () => {
         await cli('youtube', 'comment', 'add', 'dQw4w9WgXcQ', 'hi', '--reply-to', 'Ugroot.reply1')
         expect(calls.at(-1)!.body).toMatchObject({ commentText: 'hi', createReplyParams: createReplyParams('dQw4w9WgXcQ', 'Ugroot') })
       })
+    })
+
+    it('item list：Studio 的 creator/list_creator_videos，带频道的 delegationContext；状态按 privacy / draftStatus 归一', async () => {
+      const studioHome = `<script>ytcfg.set({"INNERTUBE_CLIENT_VERSION":"1.20261027.00.00","INNERTUBE_API_KEY":"fake-key","CHANNEL_ID":"${ME}"});</script>`
+      // 2026-10-30 真机：网页上传后私享草稿的条目
+      const videos = { videos: [{ videoId: 'iNZCn21Qa-s', title: 'test', privacy: 'VIDEO_PRIVACY_PRIVATE', draftStatus: 'DRAFT_STATUS_DRAFT', status: 'VIDEO_STATUS_PROCESSED', timeCreatedSeconds: '1793293166' }] }
+      await withYt({ 'studio:/': () => fakeResponse(studioHome, { headers: [['content-type', 'text/html']] }), 'studio:creator/list_creator_videos': () => videos }, async (calls) => {
+        const r = await cli('youtube', 'item', 'list')
+        expect(r.env.data.map((v: any) => [v.id, v.title, v.status])).toEqual([['iNZCn21Qa-s', 'test', 'draft']])
+        const call = calls.find((c) => c.path === 'studio:creator/list_creator_videos')!
+        expect(call.body.context.client.clientName).toBe(62)
+        expect(call.body.context.user.delegationContext.externalChannelId).toBe(ME)
+        expect(call.headers.find(([k]) => k === 'Authorization')![1]).toMatch(/^SAPISIDHASH \d+_[0-9a-f]{40}/)
+      })
+    })
+
+    it('item publish / delete 规划中：报 NOT_IMPLEMENTED，不上传文件', async () => {
+      const r = await cli('youtube', 'item', 'publish', '--video', 'x.mp4', '--title', 't')
+      expect(r.env.error.code).toBe('NOT_IMPLEMENTED')
     })
 
     it('live send：取登录后聊天输入框里的 params 发消息；被限制时报出 YouTube 的说明', async () => {

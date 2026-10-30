@@ -11,11 +11,11 @@
 - **读（不用登录）**：`item search` / `get` / `related` / `media` / `download`；`comment list` / `replies`；`user get` / `search` / `items`；`series list` / `items`（播放列表）；`keyword suggest`；`live get` / `search` / `history` / `listen`（直播聊天）。
 - **读（要登录）**：`feed list`（首页推荐、订阅流）；`history list`；`notice list` / `count`；`user likes` / `collects`（稍后观看）/ `following`，这三个只能看自己的。
 - **写（要登录）**：`item like` / `unlike` / `collect` / `uncollect`（稍后观看）；`user follow` / `unfollow`（订阅频道）；`comment add` / `delete` / `like` / `unlike`；`live send`（只发文字）；`channel create`（给账号开频道，上传、评论、直播聊天都要求有频道）。
-- **发布（要登录，账号要开频道）**：`item publish` / `list` / `delete`（自己上传的视频）。发布：`--video <文件> --title <标题>`，可选 `--text`、`--tag`、`--cover`、`--visibility public|private`、`--schedule <ISO 时间>`。`item publish` / `delete` 目前会报 `RISK_CONTROL`（Studio 要求网页端 BotGuard 校验），遇到时告诉用户去 studio.youtube.com 手动操作。
+- **自己的视频（要登录，账号要开频道）**：`item list`（数据来自 YouTube Studio）。
 
 ## 做不到
 
-`user update`、私信（YouTube 没有私信）、`keyword hot` 和热门流（趋势页已下线）、别人的点赞 / 订阅列表。
+`item publish` / `item delete`（规划中：YouTube Studio 要求网页端 BotGuard 校验，catbus 还生成不了；需要时让用户去 studio.youtube.com 操作）、`user update`、私信（YouTube 没有私信）、`keyword hot` 和热门流（趋势页已下线）、别人的点赞 / 订阅列表。
 
 ## 参数
 

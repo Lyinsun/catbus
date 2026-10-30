@@ -87,8 +87,8 @@
 | item collect | ○ | ✓ | ✓ | ✓ | ○ | ○ | ○ | ○ | ○ | ✓ | ✓ | — | — |
 | item uncollect | ○ | ✓ | ✓ | ✓ | ○ | ○ | ○ | ○ | ○ | ✓ | ✓ | — | — |
 | item repost / unrepost | — | — | ○ | — | — | ○ | — | — | — | ✓ | — | — | — |
-| item publish | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | — | — | ✓ | ◐ | — | — |
-| item delete | ○ | ○ | ○ | ◐ | ○ | ○ | ○ | — | — | ✓ | ◐ | — | — |
+| item publish | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | — | — | ✓ | ○ | — | — |
+| item delete | ○ | ○ | ○ | ◐ | ○ | ○ | ○ | — | — | ✓ | ○ | — | — |
 | item categories | — | — | — | ✓ | — | — | ○ | — | — | — | — | — | — |
 
 - douyin `item search`：--type video 走视频频道搜索，其余走综合频道；--type image 只要图文
@@ -107,9 +107,9 @@
 - youtube `item uncollect`：移出稍后观看
 - kuaishou `item publish`：不支持 --cover、--mention、--poi、--category、--price；--image 1～31 张（每张不超过 15MB），与 --video 二选一
 - x `item publish`：正文超过 280 权重时自动按长推发（需要 Premium）；--thread 发 thread
-- youtube `item publish`：走 YouTube Studio 的分段上传，账号要先开频道。Studio 建视频要求网页端的 BotGuard 校验，catbus 还生成不了，目前会报 RISK_CONTROL
+- youtube `item publish`：YouTube Studio 建视频要求网页端 BotGuard 的校验结果，catbus 还生成不了
 - bilibili `item delete`：需要人机验证（极验点选），catbus 还不能自动通过，会报 RISK_CONTROL
-- youtube `item delete`：只能删自己的视频。同样要求 Studio 的 BotGuard 校验，目前会报 RISK_CONTROL
+- youtube `item delete`：同 item publish，Studio 删除也要求 BotGuard 校验
 - `item get --area`：jd
 - `item search --sort` 取值：xhs general / latest / popular / comments / collects；douyin general / popular / latest；bilibili general / views / latest / collects；jd general / sales / price_asc / price_desc / comments；x general / latest；youtube general / popular
 - `item search --type` 取值：xhs all / video / image；douyin all / video / image；bilibili video / article；x all / video / image；youtube all / video
@@ -120,8 +120,8 @@
 - `item related --area`：jd
 - `item collect --folder`：douyin、bilibili
 - `item uncollect --folder`：douyin、bilibili
-- `item publish` 不支持的标准选项：xhs --mention --category --price；douyin --category --price；tiktok --title --poi --category --schedule --price；bilibili --image --topic --mention --poi --schedule --price；kuaishou --cover --mention --poi --category --price；weibo --title --cover --tag --mention --poi --category --schedule --price；xianyu --video --cover --tag --topic --mention --poi --category --schedule；x --title --cover --tag --topic --mention --poi --category --schedule --price；youtube --image --topic --mention --poi --category --price
-- `item publish --visibility` 取值：默认 public / private / friends；xhs public / private；bilibili public / private；weibo public / private / friends / fans；xianyu public；x public；youtube public / private
+- `item publish` 不支持的标准选项：xhs --mention --category --price；douyin --category --price；tiktok --title --poi --category --schedule --price；bilibili --image --topic --mention --poi --schedule --price；kuaishou --cover --mention --poi --category --price；weibo --title --cover --tag --mention --poi --category --schedule --price；xianyu --video --cover --tag --topic --mention --poi --category --schedule；x --title --cover --tag --topic --mention --poi --category --schedule --price
+- `item publish --visibility` 取值：默认 public / private / friends；xhs public / private；bilibili public / private；weibo public / private / friends / fans；xianyu public；x public
 - `item publish --poi-name`：xhs、douyin、weibo
 - `item publish --series`：douyin
 - `item publish --hotspot`：douyin

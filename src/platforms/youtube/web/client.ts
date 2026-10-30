@@ -40,7 +40,7 @@ const MEDIA_CLIENT_ID = '101'
 export const MEDIA_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15'
 
 /** 会改动账号数据的 InnerTube 接口：网络出错时不自动重试。 */
-const WRITE_PATH = /^(like|subscription|comment|browse\/edit_playlist|live_chat\/send|playlist|upload)\//
+const WRITE_PATH = /^(like|subscription|comment|browse\/edit_playlist|live_chat\/send|playlist|upload|channel\/create)/
 
 /** 登录签名用的 cookie：SAPISIDHASH 与两个分区的变体，有哪个就带哪个。 */
 const SID_SCHEMES: [string, string][] = [
@@ -193,7 +193,7 @@ export class YtClient {
   }
 
   /** HTTP 状态码 → 错误码。InnerTube 的业务错误也走 HTTP 状态码，消息在 `error.message`。 */
-  private async check(res: HttpResponse, path: string): Promise<void> {
+  async check(res: HttpResponse, path: string): Promise<void> {
     if (res.ok) return
     const message: string | undefined = parseJsonp(await res.clone().text().catch(() => ''))?.error?.message
     const detail = { status: res.status, path, ...(message ? { message } : {}) }

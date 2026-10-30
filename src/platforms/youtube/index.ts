@@ -1,10 +1,10 @@
 import { z } from 'zod'
-import { filter, visibility } from '../../core/options.js'
+import { filter } from '../../core/options.js'
 import { definePlatform, handlers } from '../../core/registry.js'
 import { VOCAB } from '../../core/vocab.js'
 
 /** 懒加载 web 端的 handler：只有执行到这条命令时才加载实现。 */
-const { h, impl } = handlers(() => import('./web/commands.js'))
+const { impl } = handlers(() => import('./web/commands.js'))
 
 export default definePlatform({
   id: 'youtube',
@@ -46,12 +46,8 @@ export default definePlatform({
         'item unlike': impl('full', 'itemUnlike', { note: '取消点赞（也会取消点踩）' }),
         'item collect': impl('full', 'itemCollect', { note: '加入稍后观看' }),
         'item uncollect': impl('full', 'itemUncollect', { note: '移出稍后观看' }),
-        'item publish': impl('partial', 'itemPublish', {
-          supports: ['title', 'text', 'video', 'cover', 'tag', 'visibility', 'schedule'],
-          options: { visibility: visibility('public', 'private') },
-          note: '走 YouTube Studio 的分段上传，账号要先开频道。Studio 建视频要求网页端的 BotGuard 校验，catbus 还生成不了，目前会报 RISK_CONTROL',
-        }),
-        'item delete': impl('partial', 'itemDelete', { note: '只能删自己的视频。同样要求 Studio 的 BotGuard 校验，目前会报 RISK_CONTROL' }),
+        'item publish': { upstream: 'none', note: 'YouTube Studio 建视频要求网页端 BotGuard 的校验结果，catbus 还生成不了' },
+        'item delete': { upstream: 'none', note: '同 item publish，Studio 删除也要求 BotGuard 校验' },
 
         'comment list': impl('full', 'commentList'),
         'comment replies': impl('full', 'commentReplies', { note: '<comment> 为根评论 ID；YouTube 的回复只有一层' }),
@@ -71,7 +67,7 @@ export default definePlatform({
         'live listen': impl('full', 'liveListen', { note: '轮询直播聊天：文字消息、Super Chat、会员' }),
         'live history': impl('full', 'liveHistory'),
         'live send': impl('full', 'liveSend', {
-          check: (a, o) => (o.gift != null ? 'YouTube 不支持送礼（Super Chat 需要付款），只能发文字' : VOCAB['live send']!.check?.(a, o)),
+          check: (a, o) => (o.gift != null || o.count != null ? 'YouTube 不支持送礼（Super Chat 需要付款），只能发文字' : VOCAB['live send']!.check?.(a, o)),
           note: '只发文字；不支持 --gift',
         }),
 
@@ -85,8 +81,7 @@ export default definePlatform({
 
         'history list': impl('full', 'historyList'),
 
-        'channel create': {
-          upstream: 'full',
+        'channel create': impl('full', 'channelCreate', {
           summary: '给当前账号开 YouTube 频道',
           args: [],
           options: {
@@ -95,9 +90,8 @@ export default definePlatform({
           },
           auth: 'required',
           output: 'User',
-          note: '上传视频、发评论、发直播聊天都要求账号有频道',
-          handler: h('channelCreate'),
-        },
+          note: '上传视频、发评论、发直播聊天都要求账号有频道；开好后凭证里的用户 ID 换成频道 ID',
+        }),
       },
     },
     app: 'planned',

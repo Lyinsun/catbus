@@ -14,7 +14,7 @@
 | [淘宝](taobao.md) | `taobao` | `tb` | 商品 | **cookie** | 10（8 · 2） | 30 | [TaoBaoApis](https://github.com/cv-cat/TaoBaoApis) |
 | [京东](jd.md) | `jd` | `jingdong` | 商品 SKU | **扫码** · 短信 · cookie | 21（18 · 3） | 6 | [JdApis](https://github.com/cv-cat/JdApis) |
 | [X](x.md) | `x` | `twitter` | 推文 | **cookie** | 33（30 · 3） | 20 | [XApis](https://github.com/cv-cat/XApis) |
-| [YouTube](youtube.md) | `youtube` | `yt` | 视频 | **cookie**；读取命令可免登录 | 44（40 · 4） | 0 | 无（官方 InnerTube 接口） |
+| [YouTube](youtube.md) | `youtube` | `yt` | 视频 | **cookie**；读取命令可免登录 | 42（40 · 2） | 2 | 无（官方 InnerTube 接口） |
 | [12306 铁路](12306.md) | `12306` | — | 车次 | **免登录** | 8（8 · 0） | 0 | 无（官方公开接口） |
 | [即梦](jimeng.md) | `jimeng` | `dreamina` | 作品 | **浏览器授权**（只管 `dreamina` 的登录态，仅 macOS） | 5（5 · 0） | 0 | 无（即梦官方 CLI `dreamina`） |
 
