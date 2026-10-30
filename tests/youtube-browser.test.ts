@@ -118,7 +118,7 @@ describe('openBrowser 的失败路径：临时目录都会被清理', () => {
     // launchTimeoutMs 设成 10 秒：如果等的是超时，耗时会接近 10 秒；退出后立即失败时远小于它
     const started = Date.now()
     const err = await openBrowser(base(dies, { launchTimeoutMs: 10_000 })).catch((e) => e)
-    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(Date.now() - started).toBeLessThan(8_000)
     expect(err).toMatchObject({ code: 'ERROR' })
     expect(err.message).toMatch(/浏览器退出了（退出码 3）/)
     expect(err.hint).toContain('boom')

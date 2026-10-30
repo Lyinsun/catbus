@@ -5,6 +5,8 @@ import { VOCAB } from '../../core/vocab.js'
 
 /** 懒加载 web 端的 handler：只有执行到这条命令时才加载实现。 */
 const { impl } = handlers(() => import('./web/commands.js'))
+/** 发布与删除要起本地 Chromium（AGENTS 5.7），单独懒加载，其他命令不加载 child_process 和 BotGuard 代码。 */
+const studioWrite = handlers(() => import('./web/publish.js'))
 
 export default definePlatform({
   id: 'youtube',
@@ -46,12 +48,12 @@ export default definePlatform({
         'item unlike': impl('full', 'itemUnlike', { note: '取消点赞（也会取消点踩）' }),
         'item collect': impl('full', 'itemCollect', { note: '加入稍后观看' }),
         'item uncollect': impl('full', 'itemUncollect', { note: '移出稍后观看' }),
-        'item publish': impl('partial', 'itemPublish', {
+        'item publish': studioWrite.impl('partial', 'itemPublish', {
           supports: ['title', 'text', 'video', 'cover', 'tag', 'visibility', 'schedule'],
           options: { visibility: visibility('public', 'private') },
           note: '走 YouTube Studio：分段上传，建视频要求 BotGuard 校验，需要本地 Chromium（见 AGENTS 5.7）。账号要先开频道；--schedule 先建成私享，到点转公开。自定义封面（--cover）未验证（可能需要已验证的账号）',
         }),
-        'item delete': impl('full', 'itemDelete', { note: '只能删自己的视频；同样需要本地 Chromium（BotGuard 校验）' }),
+        'item delete': studioWrite.impl('full', 'itemDelete', { note: '只能删自己的视频；同样需要本地 Chromium（BotGuard 校验）' }),
 
         'comment list': impl('full', 'commentList'),
         'comment replies': impl('full', 'commentReplies', { note: '<comment> 为根评论 ID；YouTube 的回复只有一层' }),

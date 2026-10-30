@@ -167,12 +167,8 @@ export class YtClient {
   private async post<T>(path: string, headers: HeaderPairs, json: unknown, http = this.http): Promise<T> {
     const req = { method: 'POST', url: `${ORIGIN}/youtubei/v1/${path}`, query: { prettyPrint: 'false' }, headers, json }
     // 经代理时偶发连接被重置：读取类请求重试一次；写操作不重试，避免重复提交
-    const res = await http.request(req).catch(async (err) => {
-      if (!(err instanceof CatbusError && err.code === 'NETWORK') || WRITE_PATH.test(path)) throw err
-      this.ctx.log.warn(`网络出错，重试一次：${err.message}`)
-      await rand.sleep(1000)
-      return http.request(req)
-    })
+    const send = () => http.request(req)
+    const res = await (WRITE_PATH.test(path) ? send() : retryNetwork(this.ctx, send))
     await this.check(res, path)
     return parseJson<T>(res)
   }
@@ -209,6 +205,16 @@ export class YtClient {
     }
     throw new CatbusError('UPSTREAM', `YouTube 返回 HTTP ${res.status}${message ? `：${message}` : ''}`, { detail })
   }
+}
+
+/** 网络出错（经代理时偶发连接被重置）时等 1 秒再试一次。只用于重发不会改动账号数据的请求。 */
+export function retryNetwork<T>(ctx: HandlerContext, send: () => Promise<T>): Promise<T> {
+  return send().catch(async (err) => {
+    if (!(err instanceof CatbusError && err.code === 'NETWORK')) throw err
+    ctx.log.warn(`网络出错，重试一次：${err.message}`)
+    await rand.sleep(1000)
+    return send()
+  })
 }
 
 /** responseContext.serviceTrackingParams 里的 logged_in（"0" / "1"），没有时为 null。 */

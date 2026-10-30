@@ -10,7 +10,7 @@ import type { Cookie } from '../../../core/schemas.js'
 import { authError } from '../../../core/toolkit.js'
 import type { BgChallenge } from './botguard.js'
 import { type AttestRequest, type BrowserSession, browser, findChrome } from './browser.js'
-import { STUDIO_ORIGIN, type YtClient, yt } from './client.js'
+import { retryNetwork, STUDIO_ORIGIN, type YtClient, yt } from './client.js'
 import * as norm from './normalize.js'
 import { videoId } from './resolve.js'
 import { dataUri, type MediaSource, type StudioConfig, studio, studioConfig, uploadVideo } from './studio.js'
@@ -25,7 +25,7 @@ import { dataUri, type MediaSource, type StudioConfig, studio, studioConfig, upl
  * BotGuard 只在无头 Chromium 的 Studio 页面里算（browser.ts）；其余请求全部由 Node 发出。
  *
  * 重试规则：会话请求（att/get、att/esr、reauth、ars/grst）和 interpreter 下载在网络出错时再试一次；
- * 上传分段按同一偏移重发（upload.ts 之外的 studio.ts 负责）。建视频、删除不重试：请求可能已经生效。
+ * 上传分段按同一偏移重发（studio.ts 的 uploadVideo）。建视频、删除不重试：请求可能已经生效。
  * 视频建好之后的任何失败都报 UPSTREAM 并附上视频 ID，调用方不能据此重试整条发布。
  */
 
@@ -132,13 +132,7 @@ class Attestor {
    * 网络出错（代理偶发断开）时再试一次。建视频、删除、metadata_update 不走这里。
    */
   call<T = any>(path: string, body: Record<string, unknown>, requestExtra: Record<string, unknown> = {}): Promise<T> {
-    const once = () => studio<T>(this.c, this.cfg, path, body, requestExtra)
-    return once().catch(async (err) => {
-      if (!(err instanceof CatbusError && err.code === 'NETWORK')) throw err
-      this.c.ctx.log.warn(`网络出错，重试一次：${err.message}`)
-      await rand.sleep(1000)
-      return once()
-    })
+    return retryNetwork(this.c.ctx, () => studio<T>(this.c, this.cfg, path, body, requestExtra))
   }
 
   /** att/get：返回 challenge 与 bgChallenge。 */
@@ -232,12 +226,7 @@ export async function fetchInterpreter(c: YtClient, url: string): Promise<string
     })
   }
   const req = { url: u.toString(), headers: [['User-Agent', c.ua], ['Accept', '*/*']] as [string, string][], redirect: 'manual' as const }
-  const send = () => c.bare.request(req)
-  const res = await send().catch(async (err) => {
-    if (!(err instanceof CatbusError && err.code === 'NETWORK')) throw err
-    await rand.sleep(1000)
-    return send()
-  })
+  const res = await retryNetwork(c.ctx, () => c.bare.request(req))
   // 跳转不跟随：Location 指向的地址必须也过白名单，这里直接拒绝，避免被重定向到别处
   if (res.status >= 300 && res.status < 400) {
     const to = res.headers.get('location') ?? '(无 Location)'
@@ -257,20 +246,8 @@ function unwrap(v: unknown, key: string): string | null {
   return typeof inner === 'string' && inner ? inner : null
 }
 
-/**
- * 视频已经建好之后的失败：一律 UPSTREAM 并附上视频 ID。不透传 NETWORK 或 AUTH_EXPIRED，
- * 否则调用方会以为可以重试整条发布，结果产生重复视频。
- */
-function afterCreate(err: unknown, id: string, what: string): CatbusError {
-  const reason = err instanceof Error ? err.message : String(err)
-  return new CatbusError('UPSTREAM', `视频 ${id} 已建好，但${what}失败：${reason}`, {
-    hint: `不要重新发布，视频已存在。到 https://studio.youtube.com/video/${id}/edit 手动完成，或用 item list 确认`,
-    detail: { id },
-  })
-}
-
 /** 发布视频：读取文件 → 开浏览器拿会话令牌 → 上传 → 建视频（标题、简介、可见范围、校验）→ 标签、封面、定时发布。 */
-export async function publishVideo(ctx: Ctx) {
+export async function itemPublish(ctx: Ctx) {
   const c = yt(ctx)
   if (!c.loggedIn) throw authError(ctx, '发布视频需要登录')
   const o = ctx.options as Record<string, any>
@@ -286,7 +263,7 @@ export async function publishVideo(ctx: Ctx) {
   // 先拿会话令牌，再上传：浏览器启动失败或 reauth 被拒时，不会白传一遍视频
   const id = await withBrowser(c, cfg, executable, async (a) => {
     const token = await a.sessionToken()
-    const uploaded = await uploadVideo(c, media)
+    const uploaded = await uploadVideo(c, media).finally(() => media.close?.())
     const att = await a.uploadAttestation(uploaded.scottyResourceId)
     const created = await studio<any>(
       c,
@@ -307,7 +284,7 @@ export async function publishVideo(ctx: Ctx) {
       },
       { attestationResponseData: { challenge: att.challenge, webResponse: att.webResponse }, sessionInfo: { token } },
     ).catch((err: unknown) => {
-      throw createAmbiguous(err, uploaded.scottyResourceId)
+      throw ambiguous(err, '建视频', { scottyResourceId: uploaded.scottyResourceId })
     })
     const videoIdNew: string | undefined = created?.videoId
     if (!videoIdNew) throw createRejected(created, uploaded.scottyResourceId)
@@ -317,9 +294,8 @@ export async function publishVideo(ctx: Ctx) {
     if (cover) update.videoStill = { operation: 'UPLOAD_CUSTOM_THUMBNAIL', image: { dataUri: dataUri(cover.data, cover.contentType) } }
     if (schedule != null) update.scheduledPublishing = { set: { privacy: 'PUBLIC', timeSec: String(schedule) } }
     if (Object.keys(update).length) {
-      await setMetadata(c, cfg, token, videoIdNew, update).catch((err: unknown) => {
-        throw err instanceof CatbusError && err.code === 'UPSTREAM' && err.message.startsWith(`视频 ${videoIdNew} 已建好`) ? err : afterCreate(err, videoIdNew, '设置标签 / 封面 / 定时发布')
-      })
+      // setMetadata 的任何失败都已带上视频 ID 并报 UPSTREAM（视频已存在，不能重试整条发布）
+      await setMetadata(c, cfg, token, videoIdNew, update)
     }
     return videoIdNew
   })
@@ -336,14 +312,14 @@ export async function publishVideo(ctx: Ctx) {
 }
 
 /**
- * createvideo 的网络错误：请求可能已经到达 YouTube 并建了视频，不能当作失败后重试。
- * 报 UPSTREAM，hint 说明可能已生效。
+ * 写请求（建视频、删除）的网络错误：请求可能已经到达 YouTube 并生效，不能当作失败后重试。
+ * 报 UPSTREAM，hint 说明可能已生效；其他错误原样返回。
  */
-function createAmbiguous(err: unknown, scottyResourceId: string): unknown {
+function ambiguous(err: unknown, what: string, detail: Record<string, unknown>): unknown {
   if (!(err instanceof CatbusError && err.code === 'NETWORK')) return err
-  return new CatbusError('UPSTREAM', `建视频的请求没有确定结果（网络中断）：${err.message}`, {
+  return new CatbusError('UPSTREAM', `${what}的请求没有确定结果（网络中断）：${err.message}`, {
     hint: '可能已经生效，先到 Studio 或用 item list 确认，不要直接重试',
-    detail: { kind: 'ambiguous', scottyResourceId },
+    detail: { kind: 'ambiguous', ...detail },
   })
 }
 
@@ -369,6 +345,7 @@ async function localVideo(c: YtClient, input: string): Promise<MediaSource> {
   return {
     filename: basename(input),
     size,
+    close: () => handle.close(),
     read: async (offset, length) => {
       const buf = new Uint8Array(length)
       let got = 0
@@ -391,12 +368,7 @@ async function setMetadata(c: YtClient, cfg: StudioConfig, token: string, id: st
   const hint = `到 https://studio.youtube.com/video/${id}/edit 手动设置`
   let res: any
   try {
-    res = await send().catch(async (err) => {
-      if (!(err instanceof CatbusError && err.code === 'NETWORK')) throw err
-      c.ctx.log.warn(`网络出错，重试一次：${err.message}`)
-      await rand.sleep(1000)
-      return send()
-    })
+    res = await retryNetwork(c.ctx, send)
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err)
     throw new CatbusError('UPSTREAM', `视频 ${id} 已建好，但标签 / 封面 / 定时发布没有设置成功：${why}`, { hint, detail: { id } })
@@ -449,7 +421,7 @@ function createRejected(created: any, scottyResourceId: string): CatbusError {
 /**
  * 删除自己的视频。删除请求的网络错误可能已经生效，报 UPSTREAM 并提示先确认，不要直接重试。
  */
-export async function deleteVideo(ctx: Ctx) {
+export async function itemDelete(ctx: Ctx) {
   const c = yt(ctx)
   if (!c.loggedIn) throw authError(ctx, '删除视频需要登录')
   const id = videoId(ctx.args.item!)
@@ -458,11 +430,7 @@ export async function deleteVideo(ctx: Ctx) {
   await withBrowser(c, cfg, executable, async (a) => {
     const token = await a.sessionToken()
     const res = await studio<any>(c, cfg, 'video/delete', { videoId: id }, { sessionInfo: { token } }).catch((err: unknown) => {
-      if (!(err instanceof CatbusError && err.code === 'NETWORK')) throw err
-      throw new CatbusError('UPSTREAM', `删除视频 ${id} 的请求没有确定结果（网络中断）：${err.message}`, {
-        hint: '可能已经生效，先到 Studio 或用 item list 确认，不要直接重试',
-        detail: { kind: 'ambiguous', id },
-      })
+      throw ambiguous(err, `删除视频 ${id} `, { id })
     })
     if (res?.success !== true) {
       throw new CatbusError('UPSTREAM', `删除视频 ${id} 没有成功`, {

@@ -83,6 +83,8 @@ export interface MediaSource {
   filename: string
   size: number
   read(offset: number, length: number): Promise<Uint8Array>
+  /** 本地文件的句柄，上传结束后关闭。 */
+  close?(): Promise<void>
 }
 
 /** 分段上传时可以用同一偏移重发的状态码（限流、服务端临时错误）。 */

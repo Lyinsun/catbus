@@ -1,4 +1,4 @@
-import { statSync } from 'node:fs'
+import { accessSync, constants, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { parse, stringify } from 'smol-toml'
 import { CatbusError } from './errors.js'
@@ -26,10 +26,19 @@ export function checkProxy(value: string): string {
   return value
 }
 
+function executable(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** youtube.browser：本地 Chromium 的可执行文件，要求是已存在的绝对路径（AGENTS 5.7）。 */
 export function checkBrowser(value: string): string {
-  if (!isAbsolute(value) || !statSync(value, { throwIfNoEntry: false })?.isFile()) {
-    throw new CatbusError('USAGE', `浏览器路径不存在，或不是绝对路径的文件：${value}`, { hint: '填 Chromium 可执行文件的绝对路径' })
+  if (!isAbsolute(value) || !statSync(value, { throwIfNoEntry: false })?.isFile() || !executable(value)) {
+    throw new CatbusError('USAGE', `浏览器路径不存在、不是绝对路径，或者不可执行：${value}`, { hint: '填 Chromium 可执行文件的绝对路径' })
   }
   return value
 }
