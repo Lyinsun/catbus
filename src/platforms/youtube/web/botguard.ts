@@ -32,7 +32,9 @@ export async function runBotGuard(bg: BgChallenge, binding: unknown, timeoutMs: 
   // 参数顺序与 Studio 的 bundle、bgutils-js 一致：(program, setupCb, true, interactionEl, telemetryCb, [[], []], undefined, false, loggers)
   const snapshot = await withTimeout(
     new Promise<any>((res) => {
-      vm.a(bg.program, (asyncSnapshot: any) => res(asyncSnapshot), true, page.document.body, noop, [[], []], undefined, false, [noop, noop, noop, noop, noop])
+      // 页面里交互元素是 body；没有 document 的环境（如单测）传 undefined
+      const interactionEl = page.document?.body
+      vm.a(bg.program, (asyncSnapshot: any) => res(asyncSnapshot), true, interactionEl, noop, [[], []], undefined, false, [noop, noop, noop, noop, noop])
     }),
     'vm setup',
   )

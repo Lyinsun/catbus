@@ -52,7 +52,7 @@ const SID_SCHEMES: [string, string][] = [
 export class YtClient {
   readonly http: HttpClient
   /** 游客请求（取媒体地址）用：没有 cookie 罐，响应的 Set-Cookie 不会写回当前账号。 */
-  private readonly bare: HttpClient
+  readonly bare: HttpClient
   readonly jar: CookieJar
   /** 同一命令里并发的请求（item get 的 player + next）共用一次首页请求。 */
   private configP?: Promise<YtConfig>

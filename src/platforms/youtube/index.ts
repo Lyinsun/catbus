@@ -46,10 +46,10 @@ export default definePlatform({
         'item unlike': impl('full', 'itemUnlike', { note: '取消点赞（也会取消点踩）' }),
         'item collect': impl('full', 'itemCollect', { note: '加入稍后观看' }),
         'item uncollect': impl('full', 'itemUncollect', { note: '移出稍后观看' }),
-        'item publish': impl('full', 'itemPublish', {
+        'item publish': impl('partial', 'itemPublish', {
           supports: ['title', 'text', 'video', 'cover', 'tag', 'visibility', 'schedule'],
           options: { visibility: visibility('public', 'private') },
-          note: '走 YouTube Studio：分段上传，建视频要求 BotGuard 校验，需要本地 Chromium（见 AGENTS 5.7）。账号要先开频道；--schedule 先建成私享，到点转公开',
+          note: '走 YouTube Studio：分段上传，建视频要求 BotGuard 校验，需要本地 Chromium（见 AGENTS 5.7）。账号要先开频道；--schedule 先建成私享，到点转公开。自定义封面（--cover）未验证（可能需要已验证的账号）',
         }),
         'item delete': impl('full', 'itemDelete', { note: '只能删自己的视频；同样需要本地 Chromium（BotGuard 校验）' }),
 

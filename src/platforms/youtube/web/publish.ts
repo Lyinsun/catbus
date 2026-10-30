@@ -1,34 +1,44 @@
+import { type FileHandle, open } from 'node:fs/promises'
+import { basename } from 'node:path'
 import { getConfig } from '../../../core/config.js'
-import type { CookieJar } from '../../../core/cookies.js'
 import { CatbusError } from '../../../core/errors.js'
 import { readMedia } from '../../../core/files.js'
-import { HttpClient } from '../../../core/http.js'
 import * as n from '../../../core/normalize.js'
 import * as rand from '../../../core/rand.js'
 import type { HandlerContext } from '../../../core/registry.js'
+import type { Cookie } from '../../../core/schemas.js'
 import { authError } from '../../../core/toolkit.js'
-import { type BgChallenge } from './botguard.js'
-import { type BrowserCookie, type BrowserSession, browser, findChrome } from './browser.js'
+import type { BgChallenge } from './botguard.js'
+import { type AttestRequest, type BrowserSession, browser, findChrome } from './browser.js'
 import { STUDIO_ORIGIN, type YtClient, yt } from './client.js'
 import * as norm from './normalize.js'
 import { videoId } from './resolve.js'
-import { dataUri, type StudioConfig, studio, studioConfig, uploadVideo } from './studio.js'
+import { dataUri, type MediaSource, type StudioConfig, studio, studioConfig, uploadVideo } from './studio.js'
 
 /**
  * YouTube Studio 的写操作：建视频（item publish）与删视频（item delete）。
  *
  * Studio 的写请求要在 context.request 里带两样东西（AGENTS 5.7）：
- * - sessionInfo.token：att/get → BotGuard → att/esr 换来的会话令牌（必要时再走 reauth）；
+ * - sessionInfo.token：att/get → BotGuard → att/esr 换来的会话令牌（必要时再走 reauth 与 grst）；
  * - attestationResponseData：建视频时，上传完成后对 UNBOUND 挑战再算一次 BotGuard。
+ * 顺序：先开浏览器拿到会话令牌，再上传；上传期间浏览器保持打开，上传完成后用它算 UNBOUND 的校验。
  * BotGuard 只在无头 Chromium 的 Studio 页面里算（browser.ts）；其余请求全部由 Node 发出。
- * 重试规则：会话请求（att/get、att/esr、reauth、ars/grst）和 metadata_update 在网络出错时再试一次；
- * 建视频、上传、删除不重试，因为请求可能已经生效。
+ *
+ * 重试规则：会话请求（att/get、att/esr、reauth、ars/grst）和 interpreter 下载在网络出错时再试一次；
+ * 上传分段按同一偏移重发（upload.ts 之外的 studio.ts 负责）。建视频、删除不重试：请求可能已经生效。
+ * 视频建好之后的任何失败都报 UPSTREAM 并附上视频 ID，调用方不能据此重试整条发布。
  */
 
 type Ctx = HandlerContext
 
 /** 可见范围：Studio 的 privacy 取值。 */
 const PRIVACY = { public: 'PUBLIC', private: 'PRIVATE' } as const
+
+/**
+ * interpreter 脚本允许的来源。att/get 返回的 URL 只有这些主机会被请求：实测出现过的是 www.google.com 的 /js/th/ 路径。
+ * 其他主机一律拒绝，避免把 Studio 的会话挑战交给一个不相干的地址去执行。
+ */
+const INTERPRETER_HOSTS = new Set(['www.google.com'])
 
 /** 定时发布：先建成私享，到点由 YouTube 转公开。返回 Unix 秒。 */
 function scheduleSec(iso: string): number {
@@ -44,7 +54,7 @@ async function locateChrome(): Promise<string> {
 }
 
 /**
- * 一次写操作：打开 Studio 页面（带上当前账号的 cookie），交给 fn 使用，结束时把浏览器里轮换过的 cookie 写回凭证。
+ * 一次写操作：打开 Studio 页面（带上凭证里的全部 cookie），交给 fn 使用，结束时把浏览器里轮换过的 cookie 写回凭证。
  * 浏览器只负责 BotGuard；fn 里的请求由 Node 发出。
  */
 async function withBrowser<T>(c: YtClient, cfg: StudioConfig, executable: string, fn: (a: Attestor) => Promise<T>): Promise<T> {
@@ -55,15 +65,21 @@ async function withBrowser<T>(c: YtClient, cfg: StudioConfig, executable: string
     url: `${STUDIO_ORIGIN}/channel/${cfg.channelId}/videos/upload?d=ud`,
     proxy: c.ctx.config.proxy,
     ua: c.ua,
-    cookies: jar.cookies,
+    cookies: [...jar.cookies],
+    log: c.ctx.log,
   })
   try {
     if (/accounts\.google\./.test(bw.url)) throw authError(c.ctx, 'YouTube Studio 要求登录：登录态已失效')
     return await fn(new Attestor(c, cfg, bw))
   } finally {
-    const fresh = await bw.cookies().catch(() => [] as BrowserCookie[])
-    const synced = syncCookies(jar, injected, fresh)
-    if (synced) c.ctx.log.info(`已把浏览器轮换的 ${synced} 个 cookie 写回凭证`)
+    const fresh = await bw.cookies().catch((err: Error) => {
+      c.ctx.log.warn(`读取浏览器 cookie 失败，本次轮换的 cookie 不会写回凭证：${err.message}`)
+      return null
+    })
+    if (fresh) {
+      const synced = syncCookies(c.jar.cookies, injected, fresh)
+      if (synced) c.ctx.log.info(`已把浏览器轮换的 ${synced} 个 cookie 写回凭证`)
+    }
     await bw.close()
   }
 }
@@ -73,21 +89,32 @@ export function cookieKey(c: { name: string; domain: string; path: string }): st
 }
 
 /**
- * 只写回浏览器自己改过的 cookie（值与注入时不同）。Node 侧请求已经通过 Set-Cookie 更新过的值不能被旧值覆盖。
+ * 把浏览器轮换过的 cookie 写回凭证。覆盖注入时的全部域（按名字加域匹配）。
+ * 只有同时满足两条才覆盖：浏览器的值与注入时不同（浏览器确实轮换了），并且 Node 侧这一份在这期间没有被改过（仍等于注入时的值）。
+ * 两边都改过时，取 expires 较新的那个；expires 相同或无法比较时，保留 Node 侧的值（它是最后经过 Set-Cookie 确认的）。
  * 返回写回的个数。
  */
-export function syncCookies(jar: CookieJar, injected: Map<string, string>, fresh: BrowserCookie[]): number {
-  let n = 0
-  const byKey = new Map(fresh.map((f) => [cookieKey(f), f.value]))
-  for (const c of jar.cookies) {
+export function syncCookies(jar: Cookie[], injected: Map<string, string>, fresh: Cookie[]): number {
+  let written = 0
+  const byKey = new Map(fresh.map((f) => [cookieKey(f), f]))
+  for (const c of jar) {
     const key = cookieKey(c)
-    const value = byKey.get(key)
-    if (value != null && value !== injected.get(key) && value !== c.value) {
-      c.value = value
-      n++
-    }
+    const f = byKey.get(key)
+    if (!f) continue
+    const browserChanged = f.value !== injected.get(key)
+    const nodeChanged = c.value !== injected.get(key)
+    if (!browserChanged || f.value === c.value) continue
+    if (nodeChanged && !newer(f, c)) continue
+    c.value = f.value
+    if (f.expires != null) c.expires = f.expires
+    written++
   }
-  return n
+  return written
+}
+
+/** a 的过期时间比 b 晚。都没有过期时间（会话 cookie）时不算更新。 */
+function newer(a: Cookie, b: Cookie): boolean {
+  return a.expires != null && (b.expires == null || a.expires > b.expires)
 }
 
 /** 一个写操作内的 BotGuard 与会话。 */
@@ -104,7 +131,7 @@ class Attestor {
    * 会话相关的 Studio 请求（att/get、att/esr、reauth、ars/grst）只换取校验与令牌，不改动账号数据，
    * 网络出错（代理偶发断开）时再试一次。建视频、删除、metadata_update 不走这里。
    */
-  private call<T = any>(path: string, body: Record<string, unknown>, requestExtra: Record<string, unknown> = {}): Promise<T> {
+  call<T = any>(path: string, body: Record<string, unknown>, requestExtra: Record<string, unknown> = {}): Promise<T> {
     const once = () => studio<T>(this.c, this.cfg, path, body, requestExtra)
     return once().catch(async (err) => {
       if (!(err instanceof CatbusError && err.code === 'NETWORK')) throw err
@@ -127,7 +154,8 @@ class Attestor {
   /** 在浏览器里算一次 BotGuard，返回 webResponse。interpreter 由 Node 取回，每个 URL 只取一次。 */
   private async run(bg: BgChallenge, binding: unknown): Promise<string> {
     const interpreter = await this.interpreter(bg)
-    return this.bw.attest({ bg, binding, interpreter, fallbackGlobal: 'trayride' })
+    const req: AttestRequest = { bg, binding, interpreter, fallbackGlobal: 'trayride' }
+    return this.bw.attest(req)
   }
 
   private interpreter(bg: BgChallenge): Promise<string> {
@@ -136,7 +164,7 @@ class Attestor {
       const full = url.startsWith('//') ? `https:${url}` : url
       let p = this.interpreters.get(full)
       if (!p) {
-        p = this.fetchText(full)
+        p = fetchInterpreter(this.c, full)
         this.interpreters.set(full, p)
       }
       return p
@@ -144,19 +172,6 @@ class Attestor {
     const inline = unwrap(bg.interpreterSafeScript, 'privateDoNotAccessOrElseSafeScriptWrappedValue') ?? (typeof bg.interpreterScript === 'string' ? bg.interpreterScript : null)
     if (inline) return Promise.resolve(inline)
     return Promise.reject(new CatbusError('UPSTREAM', 'BotGuard 挑战里没有 interpreter', { hint: '页面结构可能已变更' }))
-  }
-
-  /** interpreter 是 Google 的静态脚本，不带 cookie，走没有 cookie 罐的客户端。 */
-  private async fetchText(url: string): Promise<string> {
-    const http = new HttpClient({ browser: 'chrome_149', os: 'windows', proxy: this.c.ctx.config.proxy, timeout: this.c.ctx.config.timeout, log: this.c.ctx.log })
-    const req = { url, headers: [['User-Agent', this.c.ua], ['Accept', '*/*']] as [string, string][] }
-    const res = await http.request(req).catch(async (err) => {
-      if (!(err instanceof CatbusError && err.code === 'NETWORK')) throw err
-      await rand.sleep(1000)
-      return http.request(req)
-    })
-    await this.c.check(res, 'botguard')
-    return res.text()
   }
 
   /** 会话令牌：att/get（CREATOR_STUDIO_ACTION）→ BotGuard → att/esr；esr 要求 reauth 时再走 reauth 与 ars/grst。 */
@@ -199,13 +214,62 @@ class Attestor {
   }
 }
 
+/**
+ * 取回 interpreter 脚本。只允许 https、白名单主机；每一跳都校验，不跟随跳转（跳转到别的主机直接拒绝）。
+ * interpreter 是 Google 的静态脚本，不带 cookie，走没有 cookie 罐的客户端。
+ */
+export async function fetchInterpreter(c: YtClient, url: string): Promise<string> {
+  let u: URL
+  try {
+    u = new URL(url)
+  } catch {
+    throw new CatbusError('UPSTREAM', `BotGuard interpreter 地址不合法：${url}`, { hint: '页面结构可能已变更' })
+  }
+  if (u.protocol !== 'https:' || !INTERPRETER_HOSTS.has(u.hostname)) {
+    throw new CatbusError('UPSTREAM', `拒绝加载不在白名单里的 BotGuard interpreter：${u.protocol}//${u.hostname}`, {
+      hint: '页面结构可能已变更；如果这是 Google 的新静态域，需要把它加进白名单（AGENTS 5.7）',
+      detail: { host: u.hostname },
+    })
+  }
+  const req = { url: u.toString(), headers: [['User-Agent', c.ua], ['Accept', '*/*']] as [string, string][], redirect: 'manual' as const }
+  const send = () => c.bare.request(req)
+  const res = await send().catch(async (err) => {
+    if (!(err instanceof CatbusError && err.code === 'NETWORK')) throw err
+    await rand.sleep(1000)
+    return send()
+  })
+  // 跳转不跟随：Location 指向的地址必须也过白名单，这里直接拒绝，避免被重定向到别处
+  if (res.status >= 300 && res.status < 400) {
+    const to = res.headers.get('location') ?? '(无 Location)'
+    throw new CatbusError('UPSTREAM', `BotGuard interpreter 返回跳转，拒绝跟随：${to}`, { hint: '页面结构可能已变更', detail: { status: res.status } })
+  }
+  await c.check(res, 'botguard')
+  const final = new URL(res.url || u.toString())
+  if (final.protocol !== 'https:' || !INTERPRETER_HOSTS.has(final.hostname)) {
+    throw new CatbusError('UPSTREAM', `BotGuard interpreter 的最终地址不在白名单里：${final.hostname}`, { detail: { host: final.hostname } })
+  }
+  return res.text()
+}
+
 /** 从 trusted-types 包装对象里取出原始值。 */
 function unwrap(v: unknown, key: string): string | null {
   const inner = (v as Record<string, unknown> | null | undefined)?.[key]
   return typeof inner === 'string' && inner ? inner : null
 }
 
-/** 发布视频：读取文件 → 上传 → 建视频（标题、简介、可见范围、校验）→ 有标签、封面或定时发布时再 metadata_update。 */
+/**
+ * 视频已经建好之后的失败：一律 UPSTREAM 并附上视频 ID。不透传 NETWORK 或 AUTH_EXPIRED，
+ * 否则调用方会以为可以重试整条发布，结果产生重复视频。
+ */
+function afterCreate(err: unknown, id: string, what: string): CatbusError {
+  const reason = err instanceof Error ? err.message : String(err)
+  return new CatbusError('UPSTREAM', `视频 ${id} 已建好，但${what}失败：${reason}`, {
+    hint: `不要重新发布，视频已存在。到 https://studio.youtube.com/video/${id}/edit 手动完成，或用 item list 确认`,
+    detail: { id },
+  })
+}
+
+/** 发布视频：读取文件 → 开浏览器拿会话令牌 → 上传 → 建视频（标题、简介、可见范围、校验）→ 标签、封面、定时发布。 */
 export async function publishVideo(ctx: Ctx) {
   const c = yt(ctx)
   if (!c.loggedIn) throw authError(ctx, '发布视频需要登录')
@@ -213,16 +277,16 @@ export async function publishVideo(ctx: Ctx) {
   if (!o.video) throw new CatbusError('USAGE', 'YouTube 发布需要 --video', { hint: 'catbus youtube item publish --video <文件> --title <标题>' })
   if (!o.title) throw new CatbusError('USAGE', 'YouTube 发布需要 --title')
   const schedule: number | null = o.schedule ? scheduleSec(o.schedule) : null
-  // 先确认能找到浏览器，再上传，避免上传完了才发现没法建视频
   const executable = await locateChrome()
   const cfg = await studioConfig(c)
-  const video = await readMedia(c.http, o.video)
   const cover = o.cover ? await readMedia(c.http, o.cover) : null
   const privacy = schedule != null ? 'PRIVATE' : PRIVACY[o.visibility as keyof typeof PRIVACY]
-  const uploaded = await uploadVideo(c, video)
+  const media = await localVideo(c, o.video)
 
+  // 先拿会话令牌，再上传：浏览器启动失败或 reauth 被拒时，不会白传一遍视频
   const id = await withBrowser(c, cfg, executable, async (a) => {
     const token = await a.sessionToken()
+    const uploaded = await uploadVideo(c, media)
     const att = await a.uploadAttestation(uploaded.scottyResourceId)
     const created = await studio<any>(
       c,
@@ -242,16 +306,21 @@ export async function publishVideo(ctx: Ctx) {
         presumedShort: false,
       },
       { attestationResponseData: { challenge: att.challenge, webResponse: att.webResponse }, sessionInfo: { token } },
-    )
+    ).catch((err: unknown) => {
+      throw createAmbiguous(err, uploaded.scottyResourceId)
+    })
     const videoIdNew: string | undefined = created?.videoId
-    // 没有建成时不重试：这次请求可能已经建了视频，重试会得到重复的草稿
     if (!videoIdNew) throw createRejected(created, uploaded.scottyResourceId)
 
     const update: Record<string, unknown> = {}
     if (o.tag?.length) update.tags = { newTags: o.tag }
     if (cover) update.videoStill = { operation: 'UPLOAD_CUSTOM_THUMBNAIL', image: { dataUri: dataUri(cover.data, cover.contentType) } }
     if (schedule != null) update.scheduledPublishing = { set: { privacy: 'PUBLIC', timeSec: String(schedule) } }
-    if (Object.keys(update).length) await setMetadata(c, cfg, token, videoIdNew, update)
+    if (Object.keys(update).length) {
+      await setMetadata(c, cfg, token, videoIdNew, update).catch((err: unknown) => {
+        throw err instanceof CatbusError && err.code === 'UPSTREAM' && err.message.startsWith(`视频 ${videoIdNew} 已建好`) ? err : afterCreate(err, videoIdNew, '设置标签 / 封面 / 定时发布')
+      })
+    }
     return videoIdNew
   })
 
@@ -267,8 +336,55 @@ export async function publishVideo(ctx: Ctx) {
 }
 
 /**
+ * createvideo 的网络错误：请求可能已经到达 YouTube 并建了视频，不能当作失败后重试。
+ * 报 UPSTREAM，hint 说明可能已生效。
+ */
+function createAmbiguous(err: unknown, scottyResourceId: string): unknown {
+  if (!(err instanceof CatbusError && err.code === 'NETWORK')) return err
+  return new CatbusError('UPSTREAM', `建视频的请求没有确定结果（网络中断）：${err.message}`, {
+    hint: '可能已经生效，先到 Studio 或用 item list 确认，不要直接重试',
+    detail: { kind: 'ambiguous', scottyResourceId },
+  })
+}
+
+/**
+ * 视频文件按段读取：本地路径从磁盘读（不整个读进内存）；URL 形式先用 readMedia 下载到内存（只有这种情况会整个读进内存）。
+ */
+async function localVideo(c: YtClient, input: string): Promise<MediaSource> {
+  if (/^https?:\/\//i.test(input)) {
+    const m = await readMedia(c.http, input)
+    return {
+      filename: m.filename,
+      size: m.data.length,
+      read: async (offset, length) => m.data.subarray(offset, offset + length),
+    }
+  }
+  let handle: FileHandle
+  try {
+    handle = await open(input, 'r')
+  } catch {
+    throw new CatbusError('USAGE', `读取文件失败：${input}`)
+  }
+  const size = (await handle.stat()).size
+  return {
+    filename: basename(input),
+    size,
+    read: async (offset, length) => {
+      const buf = new Uint8Array(length)
+      let got = 0
+      while (got < length) {
+        const { bytesRead } = await handle.read(buf, got, length - got, offset + got)
+        if (bytesRead === 0) break
+        got += bytesRead
+      }
+      return buf.subarray(0, got)
+    },
+  }
+}
+
+/**
  * 视频已经建好之后设置标签、封面、定时发布（metadata_update）。同样的元数据设置两次结果不变，网络出错时再试一次。
- * 任何失败都带上视频 ID：此时视频已经存在，用户需要知道去哪里补设置或清理。
+ * 任何失败都带上视频 ID，并报 UPSTREAM：此时视频已经存在，用户需要知道去哪里补设置或清理。
  */
 async function setMetadata(c: YtClient, cfg: StudioConfig, token: string, id: string, update: Record<string, unknown>): Promise<void> {
   const send = () => studio<any>(c, cfg, 'video_manager/metadata_update', { encryptedVideoId: id, ...update }, { sessionInfo: { token } })
@@ -282,8 +398,8 @@ async function setMetadata(c: YtClient, cfg: StudioConfig, token: string, id: st
       return send()
     })
   } catch (err) {
-    const code = err instanceof CatbusError ? err.code : 'UPSTREAM'
-    throw new CatbusError(code, `视频 ${id} 已建好，但标签 / 封面 / 定时发布没有设置成功：${(err as Error).message}`, { hint, detail: { id } })
+    const why = err instanceof Error ? err.message : String(err)
+    throw new CatbusError('UPSTREAM', `视频 ${id} 已建好，但标签 / 封面 / 定时发布没有设置成功：${why}`, { hint, detail: { id } })
   }
   const result: string | undefined = res?.overallResult?.resultCode
   if (result && result !== 'UPDATE_SUCCESS') {
@@ -291,7 +407,7 @@ async function setMetadata(c: YtClient, cfg: StudioConfig, token: string, id: st
     const failed = Object.entries(FIELD_NAMES).filter(([k]) => res?.[k]?.success === false).map(([, v]) => v)
     const what = failed.length ? failed.join('、') : '标签 / 封面 / 定时发布'
     throw new CatbusError('UPSTREAM', `视频 ${id} 已建好，但${what}没有设置成功（YouTube 返回 ${result}）`, {
-      hint: failed.includes('封面') ? `${hint}。未通过验证的账号可能不能上传自定义封面` : hint,
+      hint: failed.includes('封面') ? `${hint}。自定义封面未验证，可能需要已验证的账号` : hint,
       detail: { id, failed, result: res.overallResult },
     })
   }
@@ -330,7 +446,9 @@ function createRejected(created: any, scottyResourceId: string): CatbusError {
   })
 }
 
-/** 删除自己的视频。 */
+/**
+ * 删除自己的视频。删除请求的网络错误可能已经生效，报 UPSTREAM 并提示先确认，不要直接重试。
+ */
 export async function deleteVideo(ctx: Ctx) {
   const c = yt(ctx)
   if (!c.loggedIn) throw authError(ctx, '删除视频需要登录')
@@ -339,7 +457,13 @@ export async function deleteVideo(ctx: Ctx) {
   const cfg = await studioConfig(c)
   await withBrowser(c, cfg, executable, async (a) => {
     const token = await a.sessionToken()
-    const res = await studio<any>(c, cfg, 'video/delete', { videoId: id }, { sessionInfo: { token } })
+    const res = await studio<any>(c, cfg, 'video/delete', { videoId: id }, { sessionInfo: { token } }).catch((err: unknown) => {
+      if (!(err instanceof CatbusError && err.code === 'NETWORK')) throw err
+      throw new CatbusError('UPSTREAM', `删除视频 ${id} 的请求没有确定结果（网络中断）：${err.message}`, {
+        hint: '可能已经生效，先到 Studio 或用 item list 确认，不要直接重试',
+        detail: { kind: 'ambiguous', id },
+      })
+    })
     if (res?.success !== true) {
       throw new CatbusError('UPSTREAM', `删除视频 ${id} 没有成功`, {
         hint: `到 https://studio.youtube.com/video/${id}/edit 确认是否还在`,

@@ -8,9 +8,10 @@ import { fakeResponse, type HttpResponse, mockSender, type PreparedRequest } fro
 import { decode, int, str } from '../src/core/pb.js'
 import * as rand from '../src/core/rand.js'
 import youtube from '../src/platforms/youtube/index.js'
-import { type BrowserCookie, browser, findChrome, type OpenOptions } from '../src/platforms/youtube/web/browser.js'
+import { browser, findChrome, type OpenOptions } from '../src/platforms/youtube/web/browser.js'
 import { count, relTime } from '../src/platforms/youtube/web/normalize.js'
 import { cookieKey, syncCookies } from '../src/platforms/youtube/web/publish.js'
+import type { Cookie } from '../src/core/schemas.js'
 import {
   commentAction,
   createCommentParams,
@@ -739,7 +740,8 @@ describe('youtube 平台（web）', () => {
 
     describe('item publish / delete（Studio：BotGuard 在无头浏览器里算，其余请求由 Node 发出）', () => {
       const VIDEO_ID = 'NEWVID1234A'
-      const INTERP = 'https://www.youtube.com/s/botguard/interp.js'
+      // 真实 att/get 返回的是 //www.google.com/js/th/...（实测抓包），必须在白名单里
+      const INTERP = 'https://www.google.com/js/th/interp.js'
       const STUDIO_HOME = `<script>ytcfg.set({"INNERTUBE_CLIENT_VERSION":"1.20261030.00.00","INNERTUBE_API_KEY":"fake-key","CHANNEL_ID":"${ME}","INNERTUBE_CONTEXT_SERIALIZED_DELEGATION_CONTEXT":"FAKE_SDC"});</script>`
       const bgChallenge = (tag: string) => ({ program: `PROG-${tag}`, interpreterUrl: { privateDoNotAccessOrElseTrustedResourceUrlWrappedValue: INTERP } })
       const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47])
@@ -763,7 +765,7 @@ describe('youtube 平台（web）', () => {
       })
 
       /** 假浏览器：记录每次 BotGuard 的 binding，返回按调用次序编号的 WEB<n>。 */
-      function fakeBrowser(opts: { url?: string; fresh?: BrowserCookie[] } = {}) {
+      function fakeBrowser(opts: { url?: string; fresh?: Cookie[] } = {}) {
         const attests: { binding: any }[] = []
         const opened: OpenOptions[] = []
         const state = { closed: 0 }
@@ -791,7 +793,7 @@ describe('youtube 平台（web）', () => {
           'studio:att/get': (body) =>
             body.engagementType === 'ENGAGEMENT_TYPE_UNBOUND' ? { challenge: 'CH2', bgChallenge: bgChallenge('unbound') } : { challenge: 'CH1', bgChallenge: bgChallenge('studio') },
           'studio:att/esr': () => ({ sessionToken: 'TOKEN1' }),
-          '/s/botguard/interp.js': () => fakeResponse('/* interpreter */', { headers: [['content-type', 'text/javascript']] }),
+          '/js/th/interp.js': () => fakeResponse('/* interpreter */', { headers: [['content-type', 'text/javascript']] }),
           '/upload/studio': () => fakeResponse('', { headers: [['x-goog-upload-url', 'https://upload.youtube.com/session/1']] }),
           '/session/1': () => fakeResponse('{"scottyResourceId":"SCOTTY1"}', { headers: [['content-type', 'application/json']] }),
           'studio:upload/createvideo': () => ({ videoId: VIDEO_ID }),
@@ -906,7 +908,31 @@ describe('youtube 平台（web）', () => {
           throw new RequestError('connection reset')
         }
         const failed = await withYt(studioRoutes({ 'studio:video_manager/metadata_update': alwaysFail }), () => cli('youtube', 'item', 'publish', '--video', video, '--title', 't', '--tag', 'a'))
-        expect(failed.env.error).toMatchObject({ code: 'NETWORK', message: expect.stringContaining(`视频 ${VIDEO_ID} 已建好`) })
+        // 视频已建好：不透传 NETWORK（否则调用方会以为能重试整条发布），统一报 UPSTREAM 并附上视频 ID
+        expect(failed.env.error).toMatchObject({ code: 'UPSTREAM', message: expect.stringContaining(`视频 ${VIDEO_ID} 已建好`), detail: { id: VIDEO_ID } })
+      })
+
+      it('publish：先拿到会话令牌再上传；createvideo 网络错误报 UPSTREAM 并提示可能已经生效，不重试', async () => {
+        fakeBrowser()
+        let creates = 0
+        await withYt(
+          studioRoutes({
+            'studio:upload/createvideo': () => {
+              creates++
+              throw new RequestError('connection reset')
+            },
+          }),
+          async (calls) => {
+            const r = await cli('youtube', 'item', 'publish', '--video', video, '--title', 't')
+            expect(r.env.error).toMatchObject({ code: 'UPSTREAM', message: expect.stringContaining('没有确定结果') })
+            expect(r.env.error.hint).toMatch(/可能已经生效.*不要直接重试/)
+            expect(creates).toBe(1)
+            // 顺序：会话令牌（att/esr）在上传之前
+            const order = calls.map((c) => c.path)
+            expect(order.indexOf('studio:att/esr')).toBeGreaterThan(-1)
+            expect(order.indexOf('studio:att/esr')).toBeLessThan(order.indexOf('/upload/studio'))
+          },
+        )
       })
 
       it('publish：建视频没有返回 videoId 时报 UPSTREAM，不重试（请求可能已经生效）', async () => {
@@ -998,16 +1024,17 @@ describe('youtube 平台（web）', () => {
       it('config 指定的浏览器不存在时报 ERROR，不回退到缓存', async () => {
         process.env.CATBUS_YOUTUBE_BROWSER = join(home.dir, 'nope', 'chrome')
         const r = await withYt({}, () => cli('youtube', 'item', 'delete', VIDEO_ID, '-y'))
-        expect(r.env.error).toMatchObject({ code: 'ERROR', message: `找不到配置的浏览器：${join(home.dir, 'nope', 'chrome')}` })
+        expect(r.env.error).toMatchObject({ code: 'ERROR', message: `CATBUS_YOUTUBE_BROWSER 指向的文件不存在或不能执行：${join(home.dir, 'nope', 'chrome')}` })
       })
     })
 
     describe('Chromium 查找与 cookie 回写', () => {
+      // 造一个可执行的占位文件（findChrome 会检查 X_OK）
       const touch = (p: string) => {
         mkdirSync(dirname(p), { recursive: true })
-        writeFileSync(p, '')
+        writeFileSync(p, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
       }
-      const ck = (name: string, value: string): BrowserCookie => ({ name, value, domain: '.youtube.com', path: '/', expires: null })
+      const ck = (name: string, value: string, extra: Partial<Cookie> = {}): Cookie => ({ name, value, domain: '.youtube.com', path: '/', expires: null, ...extra })
 
       it('darwin：取 Playwright 缓存里最新的 chromium-<版本>，忽略 headless shell', () => {
         const root = join(home.dir, 'Library', 'Caches', 'ms-playwright')
@@ -1041,25 +1068,45 @@ describe('youtube 平台（web）', () => {
         expect(findChrome({ platform: 'linux', home: home.dir, env: {} })).toBe(cache)
         expect(findChrome({ platform: 'linux', home: home.dir, env: { CATBUS_YOUTUBE_BROWSER: envExe } })).toBe(envExe)
         expect(findChrome({ platform: 'linux', home: home.dir, env: { CATBUS_YOUTUBE_BROWSER: envExe }, configured: cfgExe })).toBe(cfgExe)
-        expect(() => findChrome({ platform: 'linux', home: home.dir, env: {}, configured: join(home.dir, 'nope') })).toThrow(/找不到配置的浏览器/)
+        expect(() => findChrome({ platform: 'linux', home: home.dir, env: {}, configured: join(home.dir, 'nope') })).toThrow(/youtube\.browser 指向的文件不存在/)
       })
 
       it('什么都找不到时报 ERROR，并给出安装命令与配置方式', () => {
         expect(() => findChrome({ platform: 'linux', home: join(home.dir, 'empty'), env: {} })).toThrow(/找不到 Chromium/)
       })
 
-      it('syncCookies：只写回浏览器改过的值，Node 侧已经更新的值不被覆盖', () => {
-        const jar = new CookieJar([ck('__Secure-1PSIDTS', 'old'), ck('SAPISID', 'node-new'), ck('LOGIN_INFO', 'same')])
+      it('syncCookies：只写回浏览器改过的值，覆盖所有域，Node 侧没改过的才被覆盖', () => {
+        const other = (name: string, value: string) => ck(name, value, { domain: '.google.com' })
+        const jar = [ck('__Secure-1PSIDTS', 'old'), ck('SAPISID', 'node-new'), ck('LOGIN_INFO', 'same'), other('NID', 'g-old')]
         const injected = new Map([
           [cookieKey(ck('__Secure-1PSIDTS', '')), 'old'],
           [cookieKey(ck('SAPISID', '')), 'old'],
           [cookieKey(ck('LOGIN_INFO', '')), 'same'],
+          [cookieKey(other('NID', '')), 'g-old'],
         ])
-        const fresh = [ck('__Secure-1PSIDTS', 'browser-new'), ck('SAPISID', 'old'), ck('LOGIN_INFO', 'same')]
-        expect(syncCookies(jar, injected, fresh)).toBe(1)
-        expect(jar.get('__Secure-1PSIDTS')).toBe('browser-new')
-        expect(jar.get('SAPISID')).toBe('node-new')
-        expect(jar.get('LOGIN_INFO')).toBe('same')
+        // SAPISID：Node 侧已经通过 Set-Cookie 改过，浏览器没有改，保留 Node 侧的值
+        const fresh = [ck('__Secure-1PSIDTS', 'browser-new'), ck('SAPISID', 'old'), ck('LOGIN_INFO', 'same'), other('NID', 'g-browser')]
+        expect(syncCookies(jar, injected, fresh)).toBe(2)
+        expect(jar.find((c) => c.name === '__Secure-1PSIDTS')!.value).toBe('browser-new')
+        expect(jar.find((c) => c.name === 'SAPISID')!.value).toBe('node-new')
+        expect(jar.find((c) => c.name === 'LOGIN_INFO')!.value).toBe('same')
+        expect(jar.find((c) => c.name === 'NID')!.value).toBe('g-browser')
+      })
+
+      it('syncCookies：两边都改过同一个 cookie 时，取 expires 较新的；expires 相同则保留 Node 侧', () => {
+        const injected = new Map([[cookieKey(ck('__Secure-1PSIDCC', '')), 'v0']])
+        // 浏览器的值更新（expires 更晚）→ 写回
+        let jar = [ck('__Secure-1PSIDCC', 'node-v1', { expires: 100 })]
+        expect(syncCookies(jar, injected, [ck('__Secure-1PSIDCC', 'browser-v1', { expires: 200 })])).toBe(1)
+        expect(jar[0]).toMatchObject({ value: 'browser-v1', expires: 200 })
+        // 浏览器的值 expires 更早 → 保留 Node 侧
+        jar = [ck('__Secure-1PSIDCC', 'node-v1', { expires: 300 })]
+        expect(syncCookies(jar, injected, [ck('__Secure-1PSIDCC', 'browser-v1', { expires: 200 })])).toBe(0)
+        expect(jar[0]!.value).toBe('node-v1')
+        // expires 相同 → 保留 Node 侧
+        jar = [ck('__Secure-1PSIDCC', 'node-v1', { expires: 200 })]
+        expect(syncCookies(jar, injected, [ck('__Secure-1PSIDCC', 'browser-v1', { expires: 200 })])).toBe(0)
+        expect(jar[0]!.value).toBe('node-v1')
       })
     })
 

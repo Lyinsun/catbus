@@ -1,5 +1,5 @@
 import { CatbusError } from '../../../core/errors.js'
-import { type HeaderPairs, parseJson } from '../../../core/http.js'
+import { type HeaderPairs, type HttpResponse, parseJson } from '../../../core/http.js'
 import * as rand from '../../../core/rand.js'
 import { authError } from '../../../core/toolkit.js'
 import { STUDIO_ORIGIN, type YtClient } from './client.js'
@@ -78,12 +78,23 @@ export async function studio<T = any>(c: YtClient, cfg: StudioConfig, path: stri
   return parseJson<T>(res)
 }
 
+/** 要上传的视频：按段读取，不把整个文件放进内存。 */
+export interface MediaSource {
+  filename: string
+  size: number
+  read(offset: number, length: number): Promise<Uint8Array>
+}
+
+/** 分段上传时可以用同一偏移重发的状态码（限流、服务端临时错误）。 */
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504])
+const CHUNK_TRIES = 3
+
 /**
  * 上传视频文件，返回 Studio 建视频要用的 frontendUploadId 与 scottyResourceId。
  * 先 start 拿到上传地址，再按段 upload，最后一段带 finalize；与 Studio 页面的上传对话框一致。
+ * 某一段失败（网络出错、限流、临时错误）时，用同一个 offset 重发同一段。
  */
-export async function uploadVideo(c: YtClient, file: { data: Uint8Array; filename: string }): Promise<{ frontendUploadId: string; scottyResourceId: string }> {
-  const data = file.data
+export async function uploadVideo(c: YtClient, media: MediaSource): Promise<{ frontendUploadId: string; scottyResourceId: string }> {
   const frontendUploadId = `innertube_studio:${rand.uuid4().toUpperCase()}:0`
   const common: HeaderPairs = [
     ['User-Agent', c.ua],
@@ -99,9 +110,9 @@ export async function uploadVideo(c: YtClient, file: { data: Uint8Array; filenam
     headers: [
       ...common,
       ['X-Goog-Upload-Command', 'start'],
-      ['X-Goog-Upload-File-Name', file.filename],
+      ['X-Goog-Upload-File-Name', media.filename],
       ['X-Goog-Upload-Protocol', 'resumable'],
-      ['X-Goog-Upload-Header-Content-Length', String(data.length)],
+      ['X-Goog-Upload-Header-Content-Length', String(media.size)],
     ],
     body: JSON.stringify({ frontendUploadId }),
   })
@@ -114,24 +125,34 @@ export async function uploadVideo(c: YtClient, file: { data: Uint8Array; filenam
   const chunk = Math.max(granularity, Math.floor(CHUNK_BYTES / granularity) * granularity)
   let offset = 0
   for (;;) {
-    const end = Math.min(offset + chunk, data.length)
-    const last = end === data.length
-    const res = await c.http.request({
-      method: 'POST',
-      url: uploadUrl,
-      headers: [...common, ['X-Goog-Upload-Command', last ? 'upload, finalize' : 'upload'], ['X-Goog-Upload-Offset', String(offset)]],
-      body: data.subarray(offset, end),
-      timeout: 600,
-    })
-    if (!res.ok) throw new CatbusError('UPSTREAM', `上传视频失败：HTTP ${res.status}（已上传 ${offset} / ${data.length} 字节）`, { detail: { status: res.status, offset } })
+    const end = Math.min(offset + chunk, media.size)
+    const last = end === media.size
+    const body = await media.read(offset, end - offset)
+    const res = await sendChunk(c, uploadUrl, common, offset, body, last)
+    if (!res.ok) throw new CatbusError('UPSTREAM', `上传视频失败：HTTP ${res.status}（已上传 ${offset} / ${media.size} 字节）`, { detail: { status: res.status, offset } })
     if (last) {
       const done = await parseJson<any>(res)
       const scottyResourceId = done?.scottyResourceId
       if (!scottyResourceId) throw new CatbusError('UPSTREAM', '上传完成，但返回里没有 scottyResourceId', { detail: { keys: Object.keys(done ?? {}) } })
       return { frontendUploadId, scottyResourceId }
     }
-    c.ctx.log.info(`已上传 ${Math.round((end / data.length) * 100)}%`)
+    c.ctx.log.info(`已上传 ${Math.round((end / media.size) * 100)}%`)
     offset = end
+  }
+}
+
+/** 发一段。网络出错或状态码可重试时，用同一个 offset 重发同一段（上传协议允许这样做）。 */
+async function sendChunk(c: YtClient, url: string, common: HeaderPairs, offset: number, body: Uint8Array, last: boolean): Promise<HttpResponse> {
+  const headers: HeaderPairs = [...common, ['X-Goog-Upload-Command', last ? 'upload, finalize' : 'upload'], ['X-Goog-Upload-Offset', String(offset)]]
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await c.http.request({ method: 'POST', url, headers, body, timeout: 600 })
+      if (res.ok || attempt >= CHUNK_TRIES || !RETRYABLE_STATUS.has(res.status)) return res
+    } catch (err) {
+      if (!(err instanceof CatbusError && err.code === 'NETWORK') || attempt >= CHUNK_TRIES) throw err
+    }
+    c.ctx.log.warn(`第 ${offset} 字节起的分段上传失败，用同一偏移重发（${attempt}/${CHUNK_TRIES}）`)
+    await rand.sleep(1000 * attempt)
   }
 }
 
